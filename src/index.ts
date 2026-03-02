@@ -16,8 +16,22 @@ const heavySword = new Weapon(
 
 const barb = new Barbarian(1, [dualSword, heavySword])
 
-const Jhon = new BaseCharacter(1, barb, dualSword)
-const Emual = new BaseCharacter(1, barb, heavySword)
+const Jhon = new BaseCharacter(1, barb, heavySword, 'strength', {
+    strength: 18,
+    dexterity: 10,
+    constitution: 10,
+    intelligence: 10,
+    wisdom: 10,
+    charisma: 10
+})
+const Emual = new BaseCharacter(20, barb, heavySword, 'dexterity', {
+    strength: 10,
+    dexterity: 18,
+    constitution: 10,
+    intelligence: 10,
+    wisdom: 10,
+    charisma: 10
+})
 
 const jhonDamage = []
 const emualDamage = []
