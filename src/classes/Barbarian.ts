@@ -6,6 +6,14 @@ class Barbarian extends BaseClass {
     constructor(level: number, weaponProficiency: Weapon[]) {
         super(level, weaponProficiency)
     }
+
+    makeAttack() {}
+
+    makeAction() {}
+
+    makeBonusAction() {}
+
+    makeReaction() {}
 }
 
 
