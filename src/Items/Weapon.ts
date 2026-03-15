@@ -1,7 +1,5 @@
 import BaseItem from "./BaseItem.ts";
 
-class Weapon extends BaseItem {
-
-}
+class Weapon extends BaseItem {}
 
 export default Weapon;
