@@ -1,14 +1,22 @@
 import Weapon from "../Items/Weapon.ts";
+import type { TAttackModifier } from "../modifiers/Modifiers.ts";
 
 class BaseClass {
 
-    _level: number;
     _weaponProficiency: Weapon[]
 
-    constructor(level: number, weaponProficiency: Weapon[]) {
-        this._level = level;
+    constructor(weaponProficiency: Weapon[]) {
         this._weaponProficiency = weaponProficiency
     }
+
+    makeAction(_level: number): (() => TAttackModifier)[] {
+        return []
+    }
+
+    makeBonusAction(): (() => void)[] {
+        return []
+    }
+    
 }
 
 export default BaseClass;
