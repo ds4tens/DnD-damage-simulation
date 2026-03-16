@@ -1,7 +1,7 @@
 import type BaseClass from "../classes/BaseClass.ts";
 import Dice from "../dice/dice.ts";
 import type Weapon from "../Items/Weapon.ts";
-import type { TAttackModifier } from "../modifiers/Modifiers.ts";
+import type { TAttackContext, TAttackModifier } from "../modifiers/Modifiers.ts";
 
 type Spell = {
 	level: number;
@@ -102,9 +102,9 @@ class BaseCharacter {
 		};
 	}
 
-	_makeDamageCalculation(actionModifier: TAttackModifier, isCrit: boolean): number {
+	_makeDamageCalculation(actionModifier: TAttackModifier, isCrit: boolean, context: TAttackContext): number {
 		const damageBonusWithActionModifier = actionModifier.hasDamageModifier
-			? actionModifier.damageModifierFunction()
+			? actionModifier.damageModifierFunctions.reduce((sum, fn) => sum + fn(context), 0)
 			: 0;
 		const damageBonusWithStatModifier = this.calculateDamageBonus();
 		if (isCrit) {
@@ -123,19 +123,29 @@ class BaseCharacter {
 
 	makePossibleActions(): number {
 		const possibleActions = this._characterClass.makeAction(this._level);
-		return possibleActions.reduce((acc, action) => {
-			const actionModifier = action();
-			const resultHitCheck = this._makeHitCheck(actionModifier);
-			if (resultHitCheck.isCrit) {
-				const damage = this._makeDamageCalculation(actionModifier, true);
-				return acc + damage;
-			}
-			if (resultHitCheck.isHit) {
-				const damage = this._makeDamageCalculation(actionModifier, false);
-				return acc + damage;
-			}
-			return acc + 0;
-		}, 0);
+		const result = possibleActions.reduce(
+			(acc, action, attackIndexInTurn) => {
+				const actionModifier = action();
+				const resultHitCheck = this._makeHitCheck(actionModifier);
+				const isHit = resultHitCheck.isCrit || resultHitCheck.isHit;
+				const context: TAttackContext = {
+					attackIndexInTurn,
+					hasHitOccurredThisTurn: acc.hasHitOccurredThisTurn,
+					isFirstHitOfTurn: isHit && !acc.hasHitOccurredThisTurn,
+				};
+				if (resultHitCheck.isCrit) {
+					const damage = this._makeDamageCalculation(actionModifier, true, context);
+					return { totalDamage: acc.totalDamage + damage, hasHitOccurredThisTurn: true };
+				}
+				if (resultHitCheck.isHit) {
+					const damage = this._makeDamageCalculation(actionModifier, false, context);
+					return { totalDamage: acc.totalDamage + damage, hasHitOccurredThisTurn: true };
+				}
+				return acc;
+			},
+			{ totalDamage: 0, hasHitOccurredThisTurn: false } as { totalDamage: number; hasHitOccurredThisTurn: boolean },
+		);
+		return result.totalDamage;
 	}
 
 	// makePossibleBonusActions(): number {
