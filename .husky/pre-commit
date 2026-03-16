@@ -1,1 +1,1 @@
-npx @biomejs/biome check
+npx lint-staged
