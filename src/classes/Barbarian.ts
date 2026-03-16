@@ -16,7 +16,15 @@ class Barbarian extends BaseClass {
 		this.isRage = true;
 	}
 
-	makeBrutalStrike(level: number): number {
+	// Уровень 2: Безрассудная атака
+	protected getRecklessRageModifier(_level: number): TAttackModifier {
+		return {
+			hasAdvantage: true,
+			hasDamageModifier: false,
+		};
+	}
+
+	protected makeBrutalStrike(level: number): number {
 		if (level >= 17) return new Dice(10).rollWithNormalDistribution() + new Dice(10).rollWithNormalDistribution();
 		return new Dice(10).rollWithNormalDistribution();
 	}
@@ -28,18 +36,12 @@ class Barbarian extends BaseClass {
 				hasAdvantage: false,
 				hasDamageModifier: true,
 				damageModifierFunction: () => {
-					return this.makeBrutalStrike(level) + this.getRageDamageModifier(level);
+					return this.makeBrutalStrike(level);
 				},
 			};
 		} else if (this.isRage) {
 			// Уровень 2: Безрассудная атака
-			return {
-				hasAdvantage: true,
-				hasDamageModifier: true,
-				damageModifierFunction: () => {
-					return this.getRageDamageModifier(level);
-				},
-			};
+			return this.getRecklessRageModifier(level);
 		}
 		return {
 			hasAdvantage: false,
