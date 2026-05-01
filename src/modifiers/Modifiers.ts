@@ -1,14 +1,13 @@
-export type TAttackContext = {
-	attackIndexInTurn: number;
-	hasHitOccurredThisTurn: boolean;
-	isFirstHitOfTurn: boolean;
-};
+import type { TAttackContext } from "./CombatContext.ts";
+
+export type { TAttackContext } from "./CombatContext.ts";
 
 export type TDamageModifierFn = (ctx: TAttackContext) => number;
 
 type TBasicAttackModifier = {
 	hasAdvantage?: boolean;
 	hasDisadvantage?: boolean;
+	forceCritOnHit?: boolean;
 };
 
 type THitModifierPart = { hasHitModifier: true; hitModifierFunction: () => number } | { hasHitModifier?: false };
