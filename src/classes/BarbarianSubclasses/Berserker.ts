@@ -7,11 +7,13 @@ class Berserker extends Barbarian {
 		return {
 			hasAdvantage: true,
 			hasDamageModifier: true,
-			damageModifierFunction: () => {
-				const rageBonus = this.getRageDamageModifier(level);
-				const frenzyDice = Array.from({ length: rageBonus }, () => new Dice(6).rollWithNormalDistribution());
-				return frenzyDice.reduce((acc: number, n: number) => acc + n, 0);
-			},
+			damageModifierFunctions: [
+				(_ctx) => {
+					const rageBonus = this.getRageDamageModifier(level);
+					const frenzyDice = Array.from({ length: rageBonus }, () => new Dice(6).rollWithNormalDistribution());
+					return frenzyDice.reduce((acc: number, n: number) => acc + n, 0);
+				},
+			],
 		};
 	}
 

@@ -35,9 +35,7 @@ class Barbarian extends BaseClass {
 			return {
 				hasAdvantage: false,
 				hasDamageModifier: true,
-				damageModifierFunction: () => {
-					return this.makeBrutalStrike(level);
-				},
+				damageModifierFunctions: [(_ctx) => this.makeBrutalStrike(level)],
 			};
 		} else if (this.isRage) {
 			// Уровень 2: Безрассудная атака
