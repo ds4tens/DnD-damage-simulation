@@ -1,5 +1,6 @@
 import type BaseCharacter from "../character/BaseCharacter.ts";
 import Dice from "../dice/dice.ts";
+import { weaponMasteryRegistry } from "../Items/Weapon/WeaponMastery.ts";
 import { conditionRegistry } from "../modifiers/Conditions.ts";
 import { mergeCombatModifiers, type TCombatModifier } from "../modifiers/Modifiers.ts";
 import type {
@@ -10,7 +11,7 @@ import type {
 	THitResult,
 	TTurnContext,
 } from "./CombatTypes.ts";
-import { resolveDamage } from "./DamageResolver.ts";
+import { resolveAppliedDamage, resolveDamage } from "./DamageResolver.ts";
 
 // TODO: у воина будет свой порог крита, нужно будет посмотреть где используется
 const DEFAULT_CRIT_THRESHOLD = 20;
@@ -39,6 +40,19 @@ export function collectAttackConditionModifiers(ctx: TAttackContext): TCombatMod
 	});
 
 	return [...outgoingModifiers, ...incomingModifiers];
+}
+
+/**
+ * Собирает модификаторы от weapon mastery
+ */
+export function collectWeaponMasteryModifiers(ctx: TAttackContext): TCombatModifier[] {
+	const mastery = ctx.attacker.weapon.weaponMastery;
+
+	if (mastery === undefined || !ctx.attacker.characterClass.canUseWeaponMastery(ctx.attacker.weapon)) {
+		return [];
+	}
+
+	return weaponMasteryRegistry[mastery]?.getModifiers?.(mastery, ctx) ?? [];
 }
 
 /**
@@ -97,14 +111,32 @@ export function resolveHit(ctx: TAttackContext, modifier: TCombatModifier): THit
  * Обрабатывает одну попытку атаки по цели
  */
 export function resolveSingleAttack(ctx: TAttackContext): TAttackResult {
-	const modifiers = [...ctx.attacker.characterClass.getAttackModifiers(ctx), ...collectAttackConditionModifiers(ctx)];
+	const modifiers = [
+		...ctx.attacker.characterClass.getAttackModifiers(ctx),
+		...collectAttackConditionModifiers(ctx),
+		...collectWeaponMasteryModifiers(ctx),
+	];
 	const mergedModifier = mergeCombatModifiers(modifiers);
 	const hit = resolveHit(ctx, mergedModifier);
 
 	if (!hit.isHit) {
+		const rolledDamage = (mergedModifier.miss?.damageFns ?? []).reduce(
+			(total, damageFn) => total + damageFn({ ...ctx, hit }),
+			0,
+		);
+		const damage =
+			rolledDamage > 0
+				? {
+						rolledDamage,
+						appliedDamage: resolveAppliedDamage(rolledDamage),
+						damageType: ctx.attacker.weapon.damageType,
+					}
+				: undefined;
+
 		return {
 			attackIndexInTurn: ctx.attackIndexInTurn,
 			hit,
+			...(damage === undefined ? {} : { damage }),
 		};
 	}
 

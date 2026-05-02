@@ -65,15 +65,21 @@ class Barbarian extends BaseClass {
 	 */
 	override getAttackModifiers(ctx: TAttackContext): TCombatModifier[] {
 		if (!this.shouldApplyRecklessAttackAdvantage(ctx)) return [];
-
-		return [
-			{
-				source: "barbarian.reckless-attack",
-				attackRoll: {
-					advantage: 1,
-				},
+		const modifiers: TCombatModifier[] = [];
+		modifiers.push({
+			source: "barbarian.reckless-attack",
+			attackRoll: {
+				advantage: 1,
 			},
-		];
+		});
+
+		return modifiers;
+	}
+
+	override canUseWeaponMastery(weapon: Weapon): boolean {
+		return this.weaponProficiencies.some(
+			(proficientWeapon) => proficientWeapon.name === weapon.name && proficientWeapon.weaponMastery !== undefined,
+		);
 	}
 
 	// TODO: Probably should add here some post-hit modifiers for weapon-mastery features

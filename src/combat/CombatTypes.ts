@@ -47,7 +47,7 @@ export type TAttackContext = {
 /**
  * Результат одного броска атаки до расчета урона
  *
- * Использовать только как данныке! Результат должен описывать, что произошло,
+ * Использовать только как данныее! Результат должен описывать, что произошло,
  * а не решать, что будет дальше
  */
 export type THitResult = {
@@ -55,6 +55,15 @@ export type THitResult = {
 	totalAttackRoll: number;
 	isHit: boolean;
 	isCrit: boolean; // FIXME: Сейчас возможен исход, что значение крит не будет соответствовать isHit
+};
+
+/**
+ * Контекст для эффектов, которые применяются при промахе атаки
+ *
+ * Used this for damage that is applied when an attack misses. Examples: Graze,
+ */
+export type TMissContext = TAttackContext & {
+	hit: THitResult;
 };
 
 /**

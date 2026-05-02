@@ -2,6 +2,7 @@ import type {
 	TApplyDamageContext,
 	TAttackContext,
 	TDamageRollContext,
+	TMissContext,
 	TPostHitContext,
 	TTurnContext,
 } from "../combat/CombatTypes.ts";
@@ -32,6 +33,8 @@ export type TPostHitEffectFn = (ctx: TPostHitContext) => void;
  * Примеры: сопротивление, уязвимость, иммунитет
  */
 export type TAppliedDamageModifierFn = (ctx: TApplyDamageContext) => number;
+
+export type TMissDamageFn = (ctx: TMissContext) => number;
 
 /**
  * Один вклад правил боя из любого источника
@@ -82,6 +85,11 @@ export type TCombatModifier = {
 	appliedDamage?: {
 		modifierFns?: TAppliedDamageModifierFn[];
 	};
+
+	/** Модификаторы, которые добавляют урон при промахе */
+	miss?: {
+		damageFns?: TMissDamageFn[];
+	};
 };
 
 /**
@@ -115,6 +123,9 @@ export function mergeCombatModifiers(modifiers: TCombatModifier[]): TCombatModif
 		},
 		appliedDamage: {
 			modifierFns: modifiers.flatMap((modifier) => modifier.appliedDamage?.modifierFns ?? []),
+		},
+		miss: {
+			damageFns: modifiers.flatMap((modifier) => modifier.miss?.damageFns ?? []),
 		},
 	};
 	const canAct = modifiers.findLast((modifier) => modifier.turn?.canAct)?.turn?.canAct;

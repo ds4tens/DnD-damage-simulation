@@ -48,6 +48,13 @@ class BaseClass {
 	}
 
 	/**
+	 * Check whether this class can use a weapon mastery.
+	 */
+	canUseWeaponMastery(_weapon: Weapon): boolean {
+		return false;
+	}
+
+	/**
 	 * Return class modifiers that apply after a successful hit.
 	 */
 	getPostHitModifiers(_ctx: TPostHitContext): TCombatModifier[] {
