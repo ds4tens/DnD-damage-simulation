@@ -1,69 +1,112 @@
+import type { TAttackContext, TDamageRollContext, TPostHitContext } from "../combat/CombatTypes.ts";
 import Dice from "../dice/dice.ts";
-import type { TAttackModifier } from "../modifiers/Modifiers.ts";
+import type Weapon from "../Items/Weapon.ts";
+import type { TCombatModifier } from "../modifiers/Modifiers.ts";
 import BaseClass from "./BaseClass.ts";
 
+/**
+ * Barbarian class skeleton
+ */
 class Barbarian extends BaseClass {
-	getRageDamageModifier(level: number): number {
+	isRaging: boolean;
+
+	constructor(weaponProficiencies: Weapon[]) {
+		super(weaponProficiencies);
+		this.isRaging = false;
+	}
+
+	/**
+	 * Запускает Rage для симуляций, где считается, что Варвар её использует.
+	 *
+	 * TODO: перенести в полноценный резолвер Bonus Action
+	 */
+	startRage() {
+		this.isRaging = true;
+	}
+
+	getRageDamageBonus(level: number): number {
 		if (level <= 8) return 2;
 		if (level <= 14) return 3;
 		if (level <= 20) return 4;
-		throw new Error("Problem with level");
+		throw new Error(`Unsupported barbarian level: ${level}`);
 	}
 
-	isRage: boolean = false;
-
-	makeRage() {
-		this.isRage = true;
+	getBrutalStrikeDamageBonus(level: number): number {
+		if (level < 9) return 0;
+		if (level < 17) return new Dice(10).rollWithNormalDistribution();
+		return new Dice(10).rollWithNormalDistribution() + new Dice(10).rollWithNormalDistribution();
 	}
 
-	// Уровень 2: Безрассудная атака
-	protected getRecklessRageModifier(_level: number): TAttackModifier {
-		return {
-			hasAdvantage: true,
-			hasDamageModifier: false,
-		};
+	canUseStrengthMeleeAttack(ctx: TAttackContext | TDamageRollContext): boolean {
+		const isStrengthBased = ctx.attacker.weaponPrimaryStat === "strength";
+		const isMelee = ctx.distance === undefined || ctx.distance <= 5;
+
+		return isStrengthBased && isMelee;
 	}
 
-	protected makeBrutalStrike(level: number): number {
-		if (level >= 17) return new Dice(10).rollWithNormalDistribution() + new Dice(10).rollWithNormalDistribution();
-		return new Dice(10).rollWithNormalDistribution();
+	shouldUseBrutalStrike(ctx: TAttackContext | TDamageRollContext): boolean {
+		return ctx.attacker.level >= 9 && ctx.attackIndexInTurn === 0 && this.canUseStrengthMeleeAttack(ctx);
 	}
 
-	makeAttack(level: number, isBrutalStrikePossible: boolean = false): TAttackModifier {
-		if (this.isRage && isBrutalStrikePossible) {
-			// Уровень 9: Жестокий удар
-			return {
-				hasAdvantage: false,
-				hasDamageModifier: true,
-				damageModifierFunctions: [(_ctx) => this.makeBrutalStrike(level)],
-			};
-		} else if (this.isRage) {
-			// Уровень 2: Безрассудная атака
-			return this.getRecklessRageModifier(level);
+	isUsingRecklessAttack(ctx: TAttackContext | TDamageRollContext): boolean {
+		return ctx.attacker.level >= 2 && this.canUseStrengthMeleeAttack(ctx);
+	}
+
+	shouldApplyRecklessAttackAdvantage(ctx: TAttackContext): boolean {
+		return this.isUsingRecklessAttack(ctx) && !this.shouldUseBrutalStrike(ctx);
+	}
+
+	override getAttackCount(level: number): number {
+		return level >= 5 ? 2 : 1;
+	}
+
+	/**
+	 * Return attack-roll modifiers from Barbarian features
+	 */
+	override getAttackModifiers(ctx: TAttackContext): TCombatModifier[] {
+		if (!this.shouldApplyRecklessAttackAdvantage(ctx)) return [];
+
+		return [
+			{
+				source: "barbarian.reckless-attack",
+				attackRoll: {
+					advantage: 1,
+				},
+			},
+		];
+	}
+
+	// TODO: Probably should add here some post-hit modifiers for weapon-mastery features
+	override getPostHitModifiers(_ctx: TPostHitContext): TCombatModifier[] {
+		return [];
+	}
+
+	/**
+	 * Return damage-roll modifiers from Barbarian features
+	 */
+	override getDamageRollModifiers(ctx: TDamageRollContext): TCombatModifier[] {
+		const modifiers: TCombatModifier[] = [];
+
+		if (this.isRaging && this.canUseStrengthMeleeAttack(ctx)) {
+			modifiers.push({
+				source: "barbarian.rage",
+				damageRoll: {
+					bonusFns: [(damageCtx) => this.getRageDamageBonus(damageCtx.attacker.level)],
+				},
+			});
 		}
-		return {
-			hasAdvantage: false,
-			hasDamageModifier: false,
-		};
-	}
 
-	makeAction(level: number): (() => TAttackModifier)[] {
-		const posiibleActions = [this.makeAttack.bind(this, level)];
-		if (level >= 5 && level < 9) {
-			posiibleActions.push(this.makeAttack.bind(this, level));
-		} else if (level >= 9) {
-			posiibleActions.push(this.makeAttack.bind(this, level, true));
+		if (this.shouldUseBrutalStrike(ctx)) {
+			modifiers.push({
+				source: "barbarian.brutal-strike",
+				damageRoll: {
+					bonusFns: [(damageCtx) => this.getBrutalStrikeDamageBonus(damageCtx.attacker.level)],
+				},
+			});
 		}
-		return posiibleActions;
-	}
 
-	makeBonusAction() {
-		const possibleBonusActions = [];
-		if (!this.isRage) possibleBonusActions.push(this.makeRage.bind(this));
-		return possibleBonusActions;
+		return modifiers;
 	}
-
-	makeReaction() {}
 }
 
 export default Barbarian;
