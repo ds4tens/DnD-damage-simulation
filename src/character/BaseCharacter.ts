@@ -1,4 +1,5 @@
 import type BaseClass from "../classes/BaseClass.ts";
+import type { TFeatSelection } from "../feats/Feats.ts";
 import type Weapon from "../Items/Weapon.ts";
 import type { TConditionName, TConditionState } from "../modifiers/Conditions.ts";
 
@@ -34,6 +35,7 @@ class BaseCharacter {
 	armorClass: number;
 	hitPoints: number;
 	conditions: TConditionState[];
+	feats: TFeatSelection[];
 
 	constructor(
 		level: number,
@@ -43,6 +45,7 @@ class BaseCharacter {
 		stats: TStatBlock = defaultStatBlock,
 		armorClass: number = 16,
 		hitPoints: number = 1,
+		feats: TFeatSelection[] = [],
 	) {
 		this.level = level;
 		this.characterClass = characterClass;
@@ -52,6 +55,7 @@ class BaseCharacter {
 		this.armorClass = armorClass;
 		this.hitPoints = hitPoints;
 		this.conditions = [];
+		this.feats = feats;
 	}
 
 	getProficiencyBonus(): number {
