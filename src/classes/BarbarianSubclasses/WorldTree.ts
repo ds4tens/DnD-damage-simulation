@@ -1,8 +1,10 @@
 import Barbarian from "../Barbarian.ts";
 
-class WorldTree extends Barbarian {
-	// When you hit with such a weapon on your turn, you can activate the Push or Topple mastery property in addition to a different mastery property you're using with that weapon
-	// TODO: добавить свойство Topple на врага
-}
+/**
+ * Path of the World Tree skeleton
+ *
+ * Добавить Push/Tople и возможно прочие weapon mastery эффкеты как post-hit модификатроы
+ */
+class WorldTree extends Barbarian {}
 
 export default WorldTree;

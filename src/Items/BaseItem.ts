@@ -2,12 +2,12 @@ import type Dice from "../dice/dice.ts";
 
 class BaseItem {
 	name: string;
-	description: string;
-	type: string;
-	rarity: string;
-	price: number;
-	weight: number;
-	size: string;
+	description?: string;
+	type?: string;
+	rarity?: string;
+	price?: number;
+	weight?: number;
+	size?: string;
 	damage: Dice[];
 	damageType: string;
 

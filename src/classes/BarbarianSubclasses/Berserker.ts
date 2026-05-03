@@ -1,25 +1,36 @@
+import type { TDamageRollContext } from "../../combat/CombatTypes.ts";
 import Dice from "../../dice/dice.ts";
-import type { TAttackModifier } from "../../modifiers/Modifiers.ts";
+import type { TCombatModifier } from "../../modifiers/Modifiers.ts";
 import Barbarian from "../Barbarian.ts";
 
+/**
+ * Path of the Berserker skeleton
+ *
+ * TODO: Need reaction; Level 10: Retaliation
+ */
 class Berserker extends Barbarian {
-	protected getRecklessRageModifier(level: number): TAttackModifier {
-		return {
-			hasAdvantage: true,
-			hasDamageModifier: true,
-			damageModifierFunctions: [
-				(_ctx) => {
-					const rageBonus = this.getRageDamageModifier(level);
-					const frenzyDice = Array.from({ length: rageBonus }, () => new Dice(6).rollWithNormalDistribution());
-					return frenzyDice.reduce((acc: number, n: number) => acc + n, 0);
-				},
-			],
-		};
+	getFrenzyDamageBonus(ctx: TDamageRollContext): number {
+		if (!this.isRaging || !ctx.isFirstHitOfTurn || ctx.attacker.level < 3 || !this.isUsingRecklessAttack(ctx)) return 0;
+
+		const rageDamageBonus = this.getRageDamageBonus(ctx.attacker.level);
+		let damageBonus = 0;
+		for (let diceIndex = 0; diceIndex < rageDamageBonus; diceIndex++) {
+			damageBonus += new Dice(6).rollWithNormalDistribution();
+		}
+
+		return damageBonus;
 	}
 
-	protected makeBrutalStrike(level: number): number {
-		if (level >= 17) return new Dice(10).rollWithNormalDistribution() + new Dice(10).rollWithNormalDistribution();
-		return new Dice(10).rollWithNormalDistribution();
+	override getDamageRollModifiers(ctx: TDamageRollContext): TCombatModifier[] {
+		return [
+			...super.getDamageRollModifiers(ctx),
+			{
+				source: "barbarian.berserker.frenzy",
+				damageRoll: {
+					bonusFns: [(damageCtx) => this.getFrenzyDamageBonus(damageCtx)],
+				},
+			},
+		];
 	}
 }
 
