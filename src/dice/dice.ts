@@ -8,6 +8,10 @@ class Dice {
 		this._maxValue = maxValue;
 	}
 
+	get maxValue(): number {
+		return this._maxValue;
+	}
+
 	/**
 	 * Бросок кубика с нормальным распределением
 	 * @param useNormalDistribution - использовать ли нормальное распределение (по умолчанию true)

@@ -69,10 +69,10 @@ export type TFeatRule = {
 	repeatable?: boolean;
 	allowedAbilityScores?: TStatsType[];
 	maxAbilityScoreIncrease?: number;
-	getTurnModifiers?: (feat: TFeat, ctx: TTurnContext) => TCombatModifier;
-	getDamageRollModifiers?: (feat: TFeat, ctx: TDamageRollContext) => TCombatModifier;
+	getTurnModifiers?: (feat: TFeatSelection, ctx: TTurnContext) => TCombatModifier[];
+	getDamageRollModifiers?: (feat: TFeatSelection, ctx: TDamageRollContext) => TCombatModifier[];
 	apllyAbilityScoreImprovement?: (
-		feat: TFeat,
+		feat: TFeatSelection,
 		stats: TStatBlock,
 		improvedStats: TAbilityScoreImprovement,
 	) => TStatBlock;
@@ -144,5 +144,77 @@ export const featRegistry = {
 			}
 			return stats;
 		},
+		getDamageRollModifiers: () => [
+			{
+				source: "feat.piercer",
+				weaponDamageRoll: {
+					modifierFns: [
+						(ctx) => {
+							if (!ctx.isFirstHitOfTurn || ctx.damageType !== "piercing") return ctx.rolls;
+
+							const worstRollIndex = ctx.rolls.reduce(
+								(worstRoll, currentRoll, currentIndex) => {
+									if (
+										currentRoll.roll < Math.floor(currentRoll.dice.maxValue / 2) &&
+										worstRoll[1] &&
+										worstRoll[1] < currentRoll.dice.maxValue
+									) {
+										return [currentIndex, currentRoll.dice.maxValue];
+									}
+									return [-1, 0];
+								},
+								[-1, 0],
+							);
+
+							if (worstRollIndex[0] === -1) return ctx.rolls;
+
+							return ctx.rolls.map((roll, index) =>
+								index === worstRollIndex[0]
+									? {
+											...roll,
+											roll: roll.dice.rollWithNormalDistribution(),
+										}
+									: roll,
+							);
+						},
+					],
+				},
+				damageRoll: {
+					bonusFns: [
+						(ctx) => {
+							if (!ctx.isCrit || ctx.damageType !== "piercing") return 0;
+							// В правилах нет оружий с разными костями урона
+							return ctx.attacker.weapon.damage[0]?.rollWithNormalDistribution() ?? 0;
+						},
+					],
+				},
+			},
+		],
+	},
+	[EFeatName.SLASHER]: {
+		name: EFeatName.SLASHER,
+		type: "general",
+		// repeatable: false,
+		getDamageRollModifiers: () => [
+			{
+				source: "feat.slasher",
+				weaponDamageRoll: {
+					modifierFns: [
+						(ctx) => {
+							const newDiceResult = ctx.rolls.map((roll) => {
+								return { roll: roll.dice.rollWithNormalDistribution(), source: roll.source, dice: roll.dice };
+							});
+							if (
+								newDiceResult.reduce((total, roll) => total + roll.roll, 0) >
+								ctx.rolls.reduce((total, roll) => total + roll.roll, 0)
+							) {
+								return newDiceResult;
+							}
+							return ctx.rolls;
+						},
+					],
+				},
+			},
+		],
 	},
 } satisfies Partial<Record<TFeatName, TFeatRule>>;

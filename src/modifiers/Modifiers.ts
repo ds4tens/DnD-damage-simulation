@@ -6,6 +6,7 @@ import type {
 	TPostHitContext,
 	TTurnContext,
 } from "../combat/CombatTypes.ts";
+import type Dice from "../dice/dice.ts";
 
 /**
  * Функция, которая возвращает числовой модификатор к броску атаки
@@ -20,6 +21,18 @@ export type TAttackRollBonusFn = (ctx: TAttackContext) => number;
  * Примеры: Brutal Strike, Divine Fury, Sneak Attack, доп эффекты оружия
  */
 export type TDamageRollBonusFn = (ctx: TDamageRollContext) => number;
+
+export type TWeaponDamageRoll = {
+	dice: Dice;
+	roll: number;
+	source: "weapon" | "crit" | "bonus";
+};
+
+export type TWeaponDamageRollContext = Omit<TDamageRollContext, "baseDamage"> & {
+	rolls: TWeaponDamageRoll[];
+};
+
+export type TWeaponDamageDiceModifierFn = (ctx: TWeaponDamageRollContext) => TWeaponDamageRoll[];
 
 /**
  * Эффект который применяется после успешного попадания атаки
@@ -81,6 +94,13 @@ export type TCombatModifier = {
 		bonusFns?: TDamageRollBonusFn[];
 	};
 
+	/** Модификаторы, которые влияют на бросок урона оружия
+	 * Сейчас реализовано только для Piercer
+	 */
+	weaponDamageRoll?: {
+		modifierFns?: TWeaponDamageDiceModifierFn[];
+	};
+
 	/** Модификаторы, которые изменяют урон после того, как он был брошен */
 	appliedDamage?: {
 		modifierFns?: TAppliedDamageModifierFn[];
@@ -120,6 +140,9 @@ export function mergeCombatModifiers(modifiers: TCombatModifier[]): TCombatModif
 		},
 		damageRoll: {
 			bonusFns: modifiers.flatMap((modifier) => modifier.damageRoll?.bonusFns ?? []),
+		},
+		weaponDamageRoll: {
+			modifierFns: modifiers.flatMap((modifier) => modifier.weaponDamageRoll?.modifierFns ?? []),
 		},
 		appliedDamage: {
 			modifierFns: modifiers.flatMap((modifier) => modifier.appliedDamage?.modifierFns ?? []),

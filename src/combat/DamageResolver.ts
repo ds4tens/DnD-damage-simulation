@@ -1,5 +1,5 @@
 import type BaseCharacter from "../character/BaseCharacter.ts";
-import type { TCombatModifier } from "../modifiers/Modifiers.ts";
+import type { TCombatModifier, TWeaponDamageRoll } from "../modifiers/Modifiers.ts";
 import type { TCombatTarget, TDamageResult, TDamageRollContext } from "./CombatTypes.ts";
 
 /**
@@ -7,13 +7,37 @@ import type { TCombatTarget, TDamageResult, TDamageRollContext } from "./CombatT
  *
  * Сейчас критические попадания удваивают только кости оружия. Постоянные
  * бонусы и бонусы от модификаторов добавляются один раз
+ * FIXME TODO: roll bonus damage dice on crit
  */
-export function rollWeaponDamage(attacker: BaseCharacter, isCrit: boolean): number {
-	return attacker.weapon.damage.reduce((totalDamage, dice) => {
-		const normalRoll = dice.rollWithNormalDistribution();
-		const critRoll = isCrit ? dice.rollWithNormalDistribution() : 0;
-		return totalDamage + normalRoll + critRoll;
-	}, 0);
+export function rollWeaponDamageDice(attacker: BaseCharacter, isCrit: boolean): TWeaponDamageRoll[] {
+	return attacker.weapon.damage.flatMap((dice) => {
+		const rolls: TWeaponDamageRoll[] = [
+			{
+				dice,
+				roll: dice.rollWithNormalDistribution(),
+				source: "weapon",
+			},
+		];
+
+		if (isCrit) {
+			rolls.push({
+				dice,
+				roll: dice.rollWithNormalDistribution(),
+				source: "crit",
+			});
+		}
+
+		return rolls;
+	});
+}
+
+export function rollWeaponDamage(ctx: Omit<TDamageRollContext, "baseDamage">, modifiers: TCombatModifier[]): number {
+	const initialRolls = rollWeaponDamageDice(ctx.attacker, ctx.isCrit);
+	const modifiedRolls = modifiers
+		.flatMap((modifier) => modifier.weaponDamageRoll?.modifierFns ?? [])
+		.reduce((rolls, modifierFn) => modifierFn({ ...ctx, rolls }), initialRolls);
+
+	return modifiedRolls.reduce((totalDamage, result) => totalDamage + result.roll, 0);
 }
 
 /**
@@ -52,7 +76,15 @@ export function resolveDamage(
 	modifiers: TCombatModifier[],
 ): TDamageResult {
 	const damageType = attacker.weapon.damageType;
-	const baseDamage = rollWeaponDamage(attacker, ctx.isCrit);
+	const baseDamage = rollWeaponDamage(
+		{
+			...ctx,
+			attacker,
+			target,
+			damageType,
+		},
+		modifiers,
+	);
 	const damageRollContext: TDamageRollContext = {
 		...ctx,
 		attacker,

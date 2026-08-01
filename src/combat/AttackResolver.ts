@@ -1,5 +1,6 @@
 import type BaseCharacter from "../character/BaseCharacter.ts";
 import Dice from "../dice/dice.ts";
+import { featRegistry, type TFeatRule } from "../feats/Feats.ts";
 import { weaponMasteryRegistry } from "../Items/Weapon/WeaponMastery.ts";
 import { conditionRegistry } from "../modifiers/Conditions.ts";
 import { mergeCombatModifiers, type TCombatModifier } from "../modifiers/Modifiers.ts";
@@ -8,6 +9,7 @@ import type {
 	TAttackResult,
 	TAttackTurnResult,
 	TCombatTarget,
+	TDamageRollContext,
 	THitResult,
 	TTurnContext,
 } from "./CombatTypes.ts";
@@ -53,6 +55,16 @@ export function collectWeaponMasteryModifiers(ctx: TAttackContext): TCombatModif
 	}
 
 	return weaponMasteryRegistry[mastery]?.getModifiers?.(mastery, ctx) ?? [];
+}
+
+/**
+ * Собирает модификаторы урона от feats атакующего.
+ */
+export function collectFeatDamageRollModifiers(ctx: TDamageRollContext): TCombatModifier[] {
+	return ctx.attacker.feats.flatMap((feat) => {
+		const rule = featRegistry[feat.name as keyof typeof featRegistry] as TFeatRule | undefined;
+		return rule?.getDamageRollModifiers?.(feat, ctx) ?? [];
+	});
 }
 
 /**
@@ -151,13 +163,17 @@ export function resolveSingleAttack(ctx: TAttackContext): TAttackResult {
 			effectFn(postHitContext);
 		});
 
-	const damageModifiers = ctx.attacker.characterClass.getDamageRollModifiers({
+	const damageRollContext: TDamageRollContext = {
 		...ctx,
 		isCrit: hit.isCrit,
 		isFirstHitOfTurn: !ctx.hasHitOccurredThisTurn,
 		damageType: ctx.attacker.weapon.damageType,
 		baseDamage: 0,
-	});
+	};
+	const damageModifiers = [
+		...ctx.attacker.characterClass.getDamageRollModifiers(damageRollContext),
+		...collectFeatDamageRollModifiers(damageRollContext),
+	];
 	const damage = resolveDamage(
 		ctx.attacker,
 		ctx.target,
