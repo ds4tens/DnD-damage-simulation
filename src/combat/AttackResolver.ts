@@ -191,6 +191,7 @@ export class CombatEngine {
 				),
 			);
 		const result = resolveDamage(this.encounter, targetId, pool, { critical, ignoredResistances });
+		this.releaseInvalidGrapples();
 		this.damageLedger.push({ actorId, targetId, source, result: structuredClone(result) });
 		return result;
 	}
@@ -240,10 +241,12 @@ export class CombatEngine {
 		const actorId = this.encounter.turn.ownerId;
 		const ctx = this.featureContext(actorId, "after-attack", []);
 		for (const hook of this.hooksForActor(actorId)) hook.endTurn?.(ctx);
+		this.releaseInvalidGrapples();
 		this.encounter.endTurn();
 	}
 	private openTurn(ownerId: string): TurnStartResult {
 		const turn = this.encounter.beginTurn(ownerId);
+		this.releaseInvalidGrapples();
 		const state = this.encounter.state(ownerId);
 		for (const hook of this.hooksForActor(ownerId)) hook.startTurn?.(this.featureContext(ownerId, "before-attack", []));
 		return {
@@ -604,6 +607,7 @@ export class CombatEngine {
 	}
 	standUp(actorId: string): boolean {
 		if (this.encounter.turn.ownerId !== actorId || !this.canAct(actorId)) return false;
+		this.releaseInvalidGrapples();
 		const speed = this.encounter.effectiveSpeed(actorId);
 		if (speed <= 0 || this.encounter.turn.movementSpent + speed / 2 > speed) return false;
 		const state = this.encounter.state(actorId);
@@ -659,6 +663,23 @@ export class CombatEngine {
 		const hands = this.encounter.state(actorId).hands;
 		for (const hand of ["left", "right"] as const) if (hands[hand] === `$grapple:${targetId}`) hands[hand] = null;
 		return true;
+	}
+	/** Basic Rules2024 Grappling: Incapacitated grapplers immediately release their targets. */
+	private releaseInvalidGrapples(): void {
+		for (const targetId of this.encounter.ids) {
+			const actorId = this.encounter.state(targetId).grappledBy;
+			if (!actorId) continue;
+			const owner = this.encounter.state(actorId);
+			const distance = this.options.distanceFor?.(actorId, targetId);
+			if (
+				owner.lifeState !== "alive" ||
+				owner.conditions.some((condition) =>
+					["incapacitated", "paralyzed", "stunned", "unconscious"].includes(condition.name),
+				) ||
+				(distance !== undefined && distance > 5)
+			)
+				this.releaseGrapple(actorId, targetId);
+		}
 	}
 	private unarmedEffectEligible(actorId: string, selection: UnarmedEffectSelection): boolean {
 		const state = this.encounter.state(actorId);

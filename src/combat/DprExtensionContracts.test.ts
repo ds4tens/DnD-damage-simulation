@@ -176,3 +176,56 @@ test("explicit ammunition is spent on miss and neither rest nor a new attack rep
 	assert.equal(f.encounter.canUseAction("hero"), true);
 	assert.equal(f.roller.remaining, 0);
 });
+
+test("a grapple ends immediately when self damage incapacitates its owner, allowing the target to stand", () => {
+	const hook: CombatHook = {
+		id: "test.grapple-then-self-damage",
+		afterHitDamage: (ctx) => {
+			ctx.resolveGrapple(ctx.request.targetId);
+			ctx.targetState.conditions.push({ name: "prone" });
+			ctx.dealDamage(ctx.request.actorId, [
+				{
+					id: "self",
+					source: "test.self",
+					origin: "other",
+					damageType: "radiant",
+					dice: [],
+					flatBonus: 40,
+					doublesOnCrit: false,
+				},
+			]);
+		},
+	};
+	const f = fixture(Dagger, [12, 2, 1], [hook]);
+	f.engine.beginTurn("hero");
+	f.engine.resolveAttackAction("hero", "target");
+	assert.equal(f.encounter.state("hero").hitPoints, 0);
+	assert.equal(f.encounter.state("target").grappledBy, undefined);
+	assert.equal(
+		f.encounter.state("target").conditions.some((c) => c.name === "grappled"),
+		false,
+	);
+	assert.deepEqual(f.encounter.state("hero").hands, { left: null, right: null });
+	f.engine.endTurn();
+	f.engine.beginTurn("target");
+	assert.equal(f.engine.standUp("target"), true);
+	assert.equal(f.roller.remaining, 0);
+});
+
+test("an externally applied Incapacitated condition ends owned grapples at the next boundary", () => {
+	const hook: CombatHook = {
+		id: "test.grapple",
+		afterHitDamage: (ctx) => {
+			ctx.resolveGrapple(ctx.request.targetId);
+		},
+	};
+	const f = fixture(Dagger, [12, 2, 1], [hook]);
+	f.engine.beginTurn("hero");
+	f.engine.resolveAttackAction("hero", "target");
+	f.engine.endTurn();
+	f.encounter.state("hero").conditions.push({ name: "incapacitated" });
+	f.engine.beginTurn("target");
+	assert.equal(f.encounter.state("target").grappledBy, undefined);
+	assert.equal(f.encounter.state("hero").hands.right, null);
+	assert.equal(f.encounter.state("hero").hands.left, "hero:weapon");
+});
