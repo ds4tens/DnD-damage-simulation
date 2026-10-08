@@ -595,6 +595,11 @@ export class CombatEngine {
 			const state = this.encounter.state(id);
 			endRage(state);
 			if (state.barbarian) delete state.barbarian.recklessExpiresOwnTurn;
+			for (const hook of this.hooksForActor(id))
+				hook.onElapsedTime?.(
+					{ actorId: id, actor: this.encounter.definition(id), actorState: state, encounter: this.encounter },
+					minutes,
+				);
 		}
 	}
 	standUp(actorId: string): boolean {
@@ -1071,8 +1076,8 @@ export class CombatEngine {
 					components.map((component) => component.source).join("+"),
 				),
 			dealAttackRiderDamage: (targetId, components) => {
-				if (!ctx.hit?.isHit || !ctx.primaryDamage || ctx.primaryDamage.appliedDamage <= 0)
-					throw new Error("Attack rider requires a damaging primary hit");
+				if (!ctx.hit || !ctx.primaryDamage || ctx.primaryDamage.appliedDamage <= 0)
+					throw new Error("Attack rider requires positive primary attack damage");
 				let pool = rollDamageComponents(components, ctx.hit.isCrit, ctx.damageRoller);
 				for (const hook of this.activeHooks(ctx)) pool = hook.afterDamageRoll?.({ ...ctx, hit: ctx.hit }, pool) ?? pool;
 				validateDamagePool(pool);
@@ -1236,6 +1241,7 @@ export class CombatEngine {
 		const attack = this.encounter.nextAttack(request.actorId);
 		const ctx = this.context(request, attack.index, prepared);
 		const additionalDamage: DamageResult[] = [];
+		let resolvedAttack: AttackResult | undefined;
 		const savingThrows: ReturnType<typeof resolveSavingThrow>[] = [];
 		const originalDealDamage = ctx.dealDamage;
 		ctx.dealDamage = (targetId, components) => {
@@ -1247,6 +1253,7 @@ export class CombatEngine {
 		ctx.dealAttackRiderDamage = (targetId, components) => {
 			const result = originalRiderDamage(targetId, components);
 			additionalDamage.push(result);
+			if (resolvedAttack && result.hp.reducedToZero) resolvedAttack.attackDamageReducedToZero = true;
 			return result;
 		};
 		const originalResolveSavingThrow = ctx.resolveSavingThrow;
@@ -1335,6 +1342,7 @@ export class CombatEngine {
 			attackIndexInTurn: attack.index,
 			hit,
 			...(damage === undefined ? {} : { damage }),
+			attackDamageReducedToZero: damage?.hp.reducedToZero ?? false,
 			decisions: ctx.decisions,
 			triggeredAttacks,
 			limitations: [...(ctx.character?.characterClass.unsupportedFeatures ?? []), ...(prepared?.limitations ?? [])],
@@ -1342,6 +1350,8 @@ export class CombatEngine {
 			additionalDamage,
 			savingThrows,
 		};
+		resolvedAttack = result;
+		if ((damage?.appliedDamage ?? 0) > 0) for (const hook of hooks) hook.afterPrimaryDamage?.(ctx, result);
 		if (hit.isHit) for (const hook of hooks) hook.afterHitDamage?.({ ...ctx, hit }, result);
 		const mastery = resolveMasteryHit(ctx, result, { save: (save) => this.resolveSavingThrow(save) });
 		for (const effect of mastery.effects ?? []) this.encounter.addEffect(effect);

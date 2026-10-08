@@ -100,6 +100,8 @@ export type AttackResult = {
 	attackIndexInTurn: number;
 	hit: HitResult;
 	damage?: DamageResult;
+	/** A reduction by this weapon/Unarmed attack, including trusted riders; excludes separate save damage. */
+	attackDamageReducedToZero?: boolean;
 	decisions: readonly DecisionRecord[];
 	triggeredAttacks: readonly AttackResult[];
 	limitations: readonly string[];
@@ -291,10 +293,13 @@ export type CombatHook = {
 	) => { advantage: boolean; disadvantage: boolean };
 	startTurn?: (ctx: FeatureActionContext) => void;
 	endTurn?: (ctx: FeatureActionContext) => void;
+	onElapsedTime?: (ctx: TurnContext & { actorId: string }, minutes: number) => void;
 	onInitiative?: (ctx: RollContext) => void;
 	beforeAttack?: (ctx: AttackContext) => void;
 	prepareAttack?: (ctx: AttackContext, modifier: TCombatModifier) => TCombatModifier;
 	afterHitDamage?: (ctx: HitContext, result: AttackResult) => void;
+	/** Primary damage has been applied, including Graze; precedes ordered afterAttack triggers. */
+	afterPrimaryDamage?: (ctx: AttackContext, result: AttackResult) => void;
 	afterHit?: (ctx: HitContext) => HitResult;
 	ignoreResistance?: (ctx: RollContext, targetId: string, damageType: DamageType) => boolean;
 	afterSavingThrow?: (ctx: SaveEventContext, result: SavingThrowResult) => SavingThrowResult;

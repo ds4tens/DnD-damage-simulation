@@ -261,3 +261,127 @@ test("untrained armor affects Unarmed damage strikes and Strength/Dexterity save
 	);
 	assert.equal(roller.remaining, 0);
 });
+
+function killFixture(separateSaveDamage: boolean) {
+	const observed: boolean[] = [];
+	const rider: CombatHook = {
+		id: "test.rider",
+		afterPrimaryDamage(ctx, result) {
+			if (ctx.request.targetId !== "target") return;
+			assert.equal(result.hit.isHit, false);
+			assert.equal(result.damage?.appliedDamage, 3);
+			const components = [
+				{
+					id: "test.rider",
+					source: "test.rider",
+					origin: "other" as const,
+					damageType: "radiant" as const,
+					dice: [],
+					flatBonus: 2,
+					doublesOnCrit: false,
+				},
+			];
+			if (separateSaveDamage) {
+				const save = ctx.resolveSavingThrow({
+					targetId: "target",
+					ability: "constitution",
+					dc: 15,
+					source: "test.poison",
+				});
+				if (!save.success) ctx.dealDamage("target", components);
+			} else ctx.dealAttackRiderDamage("target", components);
+		},
+	};
+	const trigger: CombatHook = {
+		id: "test.trigger-before-rider-id",
+		afterAttack(_ctx, result) {
+			observed.push(result.attackDamageReducedToZero ?? false);
+			return result.attackDamageReducedToZero ? [{ source: "test.hew", targetId: "other" }] : [];
+		},
+	};
+	const hero = new BaseCharacter(
+		4,
+		new Barbarian([Glaive]),
+		Glaive,
+		"strength",
+		{ ...defaultStatBlock, strength: 16 },
+		16,
+		40,
+	);
+	const encounter = new EncounterState([
+		{ id: "hero", definition: hero, masteredWeaponIds: ["glaive"] },
+		{ id: "target", definition: new BaseMonster("Target", 12, 4) },
+		{ id: "other", definition: new BaseMonster("Other", 12, 100), hitPointMode: "inexhaustible" },
+	]);
+	const roller = new FixedDiceRoller(separateSaveDamage ? [1, 1] : [1, 12, 4]);
+	const engine = new CombatEngine(encounter, {
+		roller,
+		hooks: [trigger, rider],
+		strategy: {
+			useFeature: (_snapshot, featureId) => featureId !== "barbarian.reckless-attack",
+			orderTriggers: (_snapshot, ids) => [...ids].reverse(),
+		},
+	});
+	engine.beginTurn("hero");
+	return { encounter, engine, roller, observed };
+}
+test("positive Graze opens attack rider before trigger ordering and its kill belongs to the attack", () => {
+	const f = killFixture(false);
+	const attack = f.engine.resolveSingleAttack({
+		actorId: "hero",
+		targetId: "target",
+		actionSource: "attack-action",
+		mode: "melee",
+	});
+	assert.equal(attack.attackDamageReducedToZero, true);
+	assert.equal(attack.triggeredAttacks[0]?.targetId, "other");
+	assert.deepEqual(f.observed, [true, false]);
+	assert.equal(f.encounter.state("target").lifeState, "dead");
+	assert.equal(f.engine.damageEvents.length, 3);
+	assert.equal(f.roller.remaining, 0);
+});
+test("a separate saving throw's damage kill never becomes an attack damage kill", () => {
+	const f = killFixture(true);
+	const attack = f.engine.resolveSingleAttack({
+		actorId: "hero",
+		targetId: "target",
+		actionSource: "attack-action",
+		mode: "melee",
+	});
+	assert.equal(f.encounter.state("target").lifeState, "dead");
+	assert.equal(attack.attackDamageReducedToZero, false);
+	assert.equal(attack.triggeredAttacks.length, 0);
+	assert.equal(attack.savingThrows?.[0]?.success, false);
+	assert.deepEqual(f.observed, [false]);
+	assert.equal(f.roller.remaining, 0);
+});
+test("elapsed-time callback ends owned transient flags without restoring pools or clearing persistent state", () => {
+	const hook: CombatHook = {
+		id: "test.expiry",
+		onElapsedTime: (ctx, minutes) => {
+			assert.equal(minutes, 10);
+			ctx.actorState.classState["test.form.active"] = false;
+			delete ctx.actorState.sizeOverride;
+			delete ctx.actorState.speedBonus;
+		},
+	};
+	const hero = new BaseCharacter(1, new BaseClass([Dagger]), Dagger);
+	const encounter = new EncounterState([
+		{ id: "hero", definition: hero, initialClassState: { "test.form.active": true, "persistent.once": true } },
+	]);
+	const engine = new CombatEngine(encounter, { roller: new FixedDiceRoller([]), hooks: [poolHook, hook] });
+	const state = encounter.state("hero");
+	state.sizeOverride = "large";
+	state.speedBonus = 10;
+	encounter.spendResource("hero", "test.pool");
+	engine.advanceElapsedTime(0);
+	assert.equal(state.classState["test.form.active"], true);
+	assert.throws(() => engine.advanceElapsedTime(1), /at least 10/);
+	assert.equal(state.sizeOverride, "large");
+	engine.advanceElapsedTime(10);
+	assert.equal(state.classState["test.form.active"], false);
+	assert.equal(state.classState["persistent.once"], true);
+	assert.equal(state.sizeOverride, undefined);
+	assert.equal(state.speedBonus, undefined);
+	assert.equal(encounter.resourceRemaining("hero", "test.pool"), 1);
+});
