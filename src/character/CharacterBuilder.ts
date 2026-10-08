@@ -1,5 +1,6 @@
 import type BaseClass from "../classes/BaseClass.ts";
-import { featRegistry, type TFeatSelection } from "../feats/Feats.ts";
+import { resolveFeatSelections } from "../feats/FeatSelection.ts";
+import type { FeatSelection } from "../feats/FeatTypes.ts";
 import type Weapon from "../Items/Weapon.ts";
 import type { TStatBlock } from "./BaseCharacter.ts";
 import BaseCharacter, { type TStatsType } from "./BaseCharacter.ts";
@@ -10,16 +11,9 @@ export function buildCharacter(selection: {
 	weapon: Weapon;
 	weaponPrimaryStat: TStatsType;
 	stats: TStatBlock;
-	feats: TFeatSelection[];
+	feats: readonly FeatSelection[];
 }): BaseCharacter {
-	let stats = selection.stats;
-	selection.feats.forEach((feat) => {
-		const featRule = featRegistry[feat.name as keyof typeof featRegistry];
-		if (!featRule) throw new Error(`Unsupported feat selection: ${feat.name}`);
-		if (featRule?.apllyAbilityScoreImprovement) {
-			stats = featRule.apllyAbilityScoreImprovement(feat, stats, feat.abilityScoreImprovement ?? []);
-		}
-	});
+	const { stats, feats } = resolveFeatSelections(selection);
 
 	return new BaseCharacter(
 		selection.level,
@@ -29,6 +23,6 @@ export function buildCharacter(selection: {
 		stats,
 		16,
 		50,
-		selection.feats,
+		feats,
 	);
 }
