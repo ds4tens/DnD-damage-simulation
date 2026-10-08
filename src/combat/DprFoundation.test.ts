@@ -63,7 +63,11 @@ test("resource recovery caps, cumulative expenditure and fresh encounter isolati
 	assert.equal(f.encounter.resourceRemaining("hero", "test.rage"), 1);
 	assert.equal(f.encounter.resourceRemaining("hero", "test.daily"), 0);
 	f.engine.recoverResources("hero", "long-rest");
-	assert.deepEqual(f.encounter.resourceSnapshot("hero"), { "test.rage": 3, "test.daily": 1 });
+	assert.deepEqual(f.encounter.resourceSnapshot("hero"), {
+		"heroic-inspiration": 0,
+		"test.rage": 3,
+		"test.daily": 1,
+	});
 	assert.deepEqual(f.encounter.resourceSpentSnapshot("hero"), { "test.rage": 1 });
 	const snapshot = f.engine.exportPersistentState("hero");
 	assert.equal(Object.isFrozen(snapshot.resources), true);

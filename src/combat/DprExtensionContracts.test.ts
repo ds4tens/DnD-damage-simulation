@@ -212,20 +212,22 @@ test("a grapple ends immediately when self damage incapacitates its owner, allow
 	assert.equal(f.roller.remaining, 0);
 });
 
-test("an externally applied Incapacitated condition ends owned grapples at the next boundary", () => {
-	const hook: CombatHook = {
-		id: "test.grapple",
-		afterHitDamage: (ctx) => {
-			ctx.resolveGrapple(ctx.request.targetId);
-		},
-	};
-	const f = fixture(Dagger, [12, 2, 1], [hook]);
-	f.engine.beginTurn("hero");
-	f.engine.resolveAttackAction("hero", "target");
-	f.engine.endTurn();
-	f.encounter.state("hero").conditions.push({ name: "incapacitated" });
-	f.engine.beginTurn("target");
-	assert.equal(f.encounter.state("target").grappledBy, undefined);
-	assert.equal(f.encounter.state("hero").hands.right, null);
-	assert.equal(f.encounter.state("hero").hands.left, "hero:weapon");
-});
+for (const name of ["incapacitated", "paralyzed", "stunned", "unconscious"] as const)
+	test(`an externally applied ${name} condition ends owned grapples at the next boundary`, () => {
+		const hook: CombatHook = {
+			id: "test.grapple",
+			afterHitDamage: (ctx) => {
+				ctx.resolveGrapple(ctx.request.targetId);
+			},
+		};
+		const f = fixture(Dagger, [12, 2, 1], [hook]);
+		f.engine.beginTurn("hero");
+		f.engine.resolveAttackAction("hero", "target");
+		f.engine.endTurn();
+		f.encounter.state("hero").conditions.push({ name });
+		f.engine.beginTurn("target");
+		assert.equal(f.encounter.state("target").grappledBy, undefined);
+		assert.equal(f.encounter.state("hero").hands.right, null);
+		assert.equal(f.encounter.state("hero").hands.left, "hero:weapon");
+		assert.equal(f.roller.remaining, 0);
+	});

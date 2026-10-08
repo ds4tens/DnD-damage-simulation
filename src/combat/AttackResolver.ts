@@ -1,7 +1,8 @@
 import BaseCharacter from "../character/BaseCharacter.ts";
+import { assessBenefitSupport } from "../character/FeatureSupport.ts";
 import { endRage, extendRage, isReckless } from "../classes/BarbarianState.ts";
 import type { DiceRoller } from "../dice/RandomSource.ts";
-import { featCombatHooks } from "../feats/Feats.ts";
+import { featCombatHooks, getFeatMetadata } from "../feats/Feats.ts";
 import { weaponMasteryRegistry } from "../Items/Weapon/WeaponMastery.ts";
 import type Weapon from "../Items/Weapon.ts";
 import { conditionRegistry } from "../modifiers/Conditions.ts";
@@ -162,6 +163,7 @@ export class CombatEngine {
 	private readonly strategy: CombatStrategy;
 	private readonly hooks: readonly CombatHook[];
 	private readonly classHooks = new Map<string, readonly CombatHook[]>();
+	private readonly featLimitations = new Map<string, readonly string[]>();
 	private readonly actions = new Map<
 		AttackActionHandle,
 		{ remaining: number; attacks: AttackResult[]; unarmedEffects: UnarmedEffectResult[]; closed: boolean }
@@ -218,14 +220,16 @@ export class CombatEngine {
 		for (const id of encounter.ids) {
 			validateMasterySelections(encounter, id);
 			const definition = encounter.definition(id);
+			if (definition instanceof BaseCharacter) {
+				const support = assessBenefitSupport(definition.feats.flatMap((feat) => getFeatMetadata(feat.name).benefits));
+				this.featLimitations.set(
+					id,
+					support.limitations.map((benefit) => benefit.id),
+				);
+			}
 			for (const hook of this.hooksForActor(id))
 				for (const resource of hook.resourceDefinitions?.(definition) ?? []) encounter.initializeResource(id, resource);
 			encounter.validateInitialResources(id);
-			if (definition instanceof BaseCharacter)
-				for (const feat of definition.feats) {
-					if (feat.name !== "ability-score-improvement" && !this.hooks.some((hook) => hook.featName === feat.name))
-						throw new Error(`Unsupported combat feat: ${feat.name}`);
-				}
 		}
 	}
 	beginTurn(ownerId: string): TurnStartResult {
@@ -1366,7 +1370,11 @@ export class CombatEngine {
 			attackDamageReducedToZero: damage?.hp.reducedToZero ?? false,
 			decisions: ctx.decisions,
 			triggeredAttacks,
-			limitations: [...(ctx.character?.characterClass.unsupportedFeatures ?? []), ...(prepared?.limitations ?? [])],
+			limitations: [
+				...(ctx.character?.characterClass.unsupportedFeatures ?? []),
+				...(this.featLimitations.get(request.actorId) ?? []),
+				...(prepared?.limitations ?? []),
+			],
 			...(prepared ? { weaponInstanceId: prepared.instance.id } : {}),
 			additionalDamage,
 			savingThrows,

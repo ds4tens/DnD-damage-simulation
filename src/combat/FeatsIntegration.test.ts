@@ -1,11 +1,13 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import BaseCharacter from "../character/BaseCharacter.ts";
+import { buildLegalCharacter, combatantInputForBuild } from "../character/CharacterBuild.ts";
 import { buildCharacter } from "../character/CharacterBuilder.ts";
+import { sampleSelection } from "../character/CharacterBuildTestFixtures.ts";
 import BaseClass from "../classes/BaseClass.ts";
 import { FixedDiceRoller } from "../dice/RandomSource.ts";
 import { EFeatName, type FeatSelection, featRegistry } from "../feats/Feats.ts";
-import { Greatsword } from "../Items/Weapon/WeaponList.ts";
+import { Greatsword, Longbow } from "../Items/Weapon/WeaponList.ts";
 import BaseMonster from "../monster/BaseMonster.ts";
 import { createFiveFeatScenario } from "../scenarios/FiveFeats.ts";
 import { CombatEngine } from "./AttackResolver.ts";
@@ -27,6 +29,87 @@ test("canonical registry exports the complete immutable PHB feat catalog and def
 		assert.equal(Object.isFrozen(rule), true);
 		if (rule.combatHook) assert.equal(rule.combatHook.featName, name);
 	}
+});
+
+test("legal Weapon Master grants ranged mastery without requiring a combat hook", () => {
+	const selection = sampleSelection(4);
+	const build = buildLegalCharacter({
+		...selection,
+		progression: [
+			{
+				level: 4,
+				feat: {
+					name: "weapon-master",
+					abilityScoreImprovement: [{ abilityScore: "dexterity", amount: 1 }],
+					choices: { weaponMastery: "longbow" },
+				},
+			},
+		],
+		equipment: {
+			...selection.equipment,
+			weapons: [...selection.equipment.weapons, { id: "bow", weaponId: "longbow" }],
+			hands: { left: "bow", right: "bow" },
+		},
+		stock: { ammunition: { arrow: 1 } },
+	});
+	assert.equal(featRegistry["weapon-master"].combatHook, undefined);
+	const encounter = new EncounterState([
+		combatantInputForBuild(build, "hero"),
+		{ id: "target", definition: new BaseMonster("Target", 10, 100) },
+	]);
+	const engine = new CombatEngine(encounter, {
+		roller: new FixedDiceRoller([10, 6]),
+		strategy: { useFeature: (_snapshot, feature) => feature === "weaponMastery.slow" },
+	});
+	engine.beginTurn("hero");
+	const attacks = engine.resolveAttackAction("hero", "target", { weapon: Longbow, mode: "ranged", distance: 10 });
+	assert.equal(attacks.attacks[0]?.damage?.appliedDamage, 8);
+	assert.equal(encounter.effectiveSpeed("target"), 20);
+});
+
+test("legal Human Tough works through builder statistics without a combat hook", () => {
+	const build = buildLegalCharacter({
+		...sampleSelection(),
+		species: { id: "human", skill: "insight" },
+		humanOriginFeat: { name: "tough" },
+	});
+	assert.equal(featRegistry.tough.combatHook, undefined);
+	assert.equal(build.character.hitPoints, 16);
+	const encounter = new EncounterState([combatantInputForBuild(build, "hero")]);
+	new CombatEngine(encounter, { roller: new FixedDiceRoller([]) });
+	assert.equal(encounter.state("hero").hitPoints, 16);
+});
+
+test("metadata-only feat branches remain visible while unknown raw IDs reject", () => {
+	const build = buildLegalCharacter({
+		...sampleSelection(4),
+		progression: [
+			{
+				level: 4,
+				feat: {
+					name: "charger",
+					abilityScoreImprovement: [{ abilityScore: "strength", amount: 1 }],
+				},
+			},
+		],
+	});
+	const encounter = new EncounterState([
+		combatantInputForBuild(build, "hero"),
+		{ id: "target", definition: new BaseMonster("Target", 10, 100) },
+	]);
+	const engine = new CombatEngine(encounter, {
+		roller: new FixedDiceRoller([10, 4]),
+		strategy: { useFeature: () => false },
+	});
+	engine.beginTurn("hero");
+	assert.ok(engine.resolveAttackAction("hero", "target").attacks[0]?.limitations.includes("charger.charge-attack"));
+	assert.throws(
+		() =>
+			new BaseCharacter(4, new BaseClass([]), Greatsword, "strength", stats, 16, 50, [
+				{ name: "unknown-feat" } as unknown as FeatSelection,
+			]),
+		/Unsupported feat selection/,
+	);
 });
 
 test("constructor and builder validate raw selections and apply ASI exactly once", () => {
