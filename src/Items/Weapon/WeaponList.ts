@@ -1,222 +1,261 @@
+import type { DamageType } from "../../combat/DamageTypes.ts";
 import Dice from "../../dice/dice.ts";
-import Weapon from "../Weapon.ts";
-import { EWeaponMastery } from "./WeaponMastery.ts";
+import Weapon, { type WeaponCombatMetadata, type WeaponProficiencyCategory } from "../Weapon.ts";
+import { EWeaponMastery, type TWeaponMastery } from "./WeaponMastery.ts";
 
-/** PHB 2024 p.215 — 1d8 slashing one-handed; versatile 1d10 two-handed. Mastery: Topple. */
-export const Battleaxe = new Weapon(
-	"Battleaxe",
-	"Martial Weapon, Melee Weapon. Versatile — one-handed melee 1d8, two-handed melee 1d10 (parenthetical damage applies when wielding with two hands). " +
-		"Mastery: Topple — on a hit you can force the target to make a Constitution saving throw (DC 8 plus the ability modifier used for the attack roll and your Proficiency Bonus); on a failed save the target has the Prone condition. " +
-		"Source: PHB 2024, page 215; SRD 5.2.1 and Basic Rules (5.5e/2024).",
-	"martial",
-	"common",
-	10,
-	4,
-	"medium",
-	[new Dice(8)],
-	"slashing",
-	EWeaponMastery.TOPPLE,
-	{ category: "melee", properties: ["versatile"] },
-);
+/** Basic Rules 2024 Equipment / SRD 5.2.1 pp.89–91; PHB errata v2.0.
+ * https://www.dndbeyond.com/sources/dnd/br-2024/equipment#Weapons
+ * Verified 2026-10-08. Price is GP; weight is lb. Net is adventuring gear in 2024.
+ */
+function weapon(
+	name: string,
+	proficiencyCategory: WeaponProficiencyCategory,
+	dice: readonly number[],
+	damageType: DamageType,
+	mastery: TWeaponMastery,
+	weight: number,
+	price: number,
+	metadata: WeaponCombatMetadata,
+): Weapon {
+	return new Weapon(
+		name,
+		"Basic Rules 2024 / SRD 5.2.1, Equipment: Weapons table.",
+		proficiencyCategory,
+		"common",
+		price,
+		weight,
+		"medium",
+		dice.map((sides) => new Dice(sides)),
+		damageType,
+		mastery,
+		{ ...metadata, proficiencyCategory },
+	);
+}
+const melee = { category: "melee" } as const;
+const ranged = { category: "ranged" } as const;
+const thrown20 = { normal: 20, long: 60 } as const;
 
-/** XPHB p.215 / PHB-style 2024 — simple light melee 1d4 bludgeoning. Mastery: Slow. */
-// export const Club = new Weapon(
-// 	"Club",
-// 	"Simple Weapon, Melee Weapon. Light. Mastery: Slow (see Weapon Mastery, PHB 2024 / XPHB). " +
-// 		"Source: XPHB, page 215; SRD 5.2.1 and Basic Rules (2024). Value 10 cp (1 sp).",
-// 	"simple",
-// 	"none",
-// 	10,
-// 	2,
-// 	"light",
-// 	[new Dice(4)],
-// 	"bludgeoning",
-// );
+export const Club = weapon("Club", "simple", [4], "bludgeoning", EWeaponMastery.SLOW, 2, 0.1, {
+	...melee,
+	properties: ["light"],
+});
+export const Dagger = weapon("Dagger", "simple", [4], "piercing", EWeaponMastery.NICK, 1, 2, {
+	...melee,
+	properties: ["finesse", "light", "thrown"],
+	range: thrown20,
+});
+export const Greatclub = weapon("Greatclub", "simple", [8], "bludgeoning", EWeaponMastery.PUSH, 10, 0.2, {
+	...melee,
+	properties: ["two-handed"],
+});
+export const Handaxe = weapon("Handaxe", "simple", [6], "slashing", EWeaponMastery.VEX, 2, 5, {
+	...melee,
+	properties: ["light", "thrown"],
+	range: thrown20,
+});
+export const Javelin = weapon("Javelin", "simple", [6], "piercing", EWeaponMastery.SLOW, 2, 0.5, {
+	...melee,
+	properties: ["thrown"],
+	range: { normal: 30, long: 120 },
+});
+export const LightHammer = weapon("Light Hammer", "simple", [4], "bludgeoning", EWeaponMastery.NICK, 2, 2, {
+	...melee,
+	properties: ["light", "thrown"],
+	range: thrown20,
+});
+export const Mace = weapon("Mace", "simple", [6], "bludgeoning", EWeaponMastery.SAP, 4, 5, melee);
+export const Quarterstaff = weapon("Quarterstaff", "simple", [6], "bludgeoning", EWeaponMastery.TOPPLE, 4, 0.2, {
+	...melee,
+	properties: ["versatile"],
+	versatileDamage: [8],
+});
+export const Sickle = weapon("Sickle", "simple", [4], "slashing", EWeaponMastery.NICK, 2, 1, {
+	...melee,
+	properties: ["light"],
+});
+export const Spear = weapon("Spear", "simple", [6], "piercing", EWeaponMastery.SAP, 3, 1, {
+	...melee,
+	properties: ["thrown", "versatile"],
+	range: thrown20,
+	versatileDamage: [8],
+});
+export const Dart = weapon("Dart", "simple", [4], "piercing", EWeaponMastery.VEX, 0.25, 0.05, {
+	...ranged,
+	properties: ["finesse", "thrown"],
+	range: thrown20,
+});
+export const LightCrossbow = weapon("Light Crossbow", "simple", [8], "piercing", EWeaponMastery.SLOW, 5, 25, {
+	...ranged,
+	properties: ["ammunition", "loading", "two-handed"],
+	range: { normal: 80, long: 320 },
+	ammunitionKind: "bolt",
+});
+export const Shortbow = weapon("Shortbow", "simple", [6], "piercing", EWeaponMastery.VEX, 2, 25, {
+	...ranged,
+	properties: ["ammunition", "two-handed"],
+	range: { normal: 80, long: 320 },
+	ammunitionKind: "arrow",
+});
+export const Sling = weapon("Sling", "simple", [4], "bludgeoning", EWeaponMastery.SLOW, 0, 0.1, {
+	...ranged,
+	properties: ["ammunition"],
+	range: { normal: 30, long: 120 },
+	ammunitionKind: "bullet",
+});
+export const Battleaxe = weapon("Battleaxe", "martial", [8], "slashing", EWeaponMastery.TOPPLE, 4, 10, {
+	...melee,
+	properties: ["versatile"],
+	versatileDamage: [10],
+});
+export const Flail = weapon("Flail", "martial", [8], "bludgeoning", EWeaponMastery.SAP, 2, 10, melee);
+export const Glaive = weapon("Glaive", "martial", [10], "slashing", EWeaponMastery.GRAZE, 6, 20, {
+	...melee,
+	properties: ["heavy", "reach", "two-handed"],
+	reach: 10,
+});
+export const Greataxe = weapon("Greataxe", "martial", [12], "slashing", EWeaponMastery.CLEAVE, 7, 30, {
+	...melee,
+	properties: ["heavy", "two-handed"],
+});
+export const Greatsword = weapon("Greatsword", "martial", [6, 6], "slashing", EWeaponMastery.GRAZE, 6, 50, {
+	...melee,
+	properties: ["heavy", "two-handed"],
+});
+export const Halberd = weapon("Halberd", "martial", [10], "slashing", EWeaponMastery.CLEAVE, 6, 20, {
+	...melee,
+	properties: ["heavy", "reach", "two-handed"],
+	reach: 10,
+});
+export const Lance = weapon("Lance", "martial", [10], "piercing", EWeaponMastery.TOPPLE, 6, 10, {
+	...melee,
+	properties: ["heavy", "reach", "two-handed"],
+	reach: 10,
+	oneHandedWhenMounted: true,
+});
+export const Longsword = weapon("Longsword", "martial", [8], "slashing", EWeaponMastery.SAP, 3, 15, {
+	...melee,
+	properties: ["versatile"],
+	versatileDamage: [10],
+});
+export const Maul = weapon("Maul", "martial", [6, 6], "bludgeoning", EWeaponMastery.TOPPLE, 10, 10, {
+	...melee,
+	properties: ["heavy", "two-handed"],
+});
+export const Morningstar = weapon("Morningstar", "martial", [8], "piercing", EWeaponMastery.SAP, 4, 15, melee);
+export const Pike = weapon("Pike", "martial", [10], "piercing", EWeaponMastery.PUSH, 18, 5, {
+	...melee,
+	properties: ["heavy", "reach", "two-handed"],
+	reach: 10,
+});
+export const Rapier = weapon("Rapier", "martial", [8], "piercing", EWeaponMastery.VEX, 2, 25, {
+	...melee,
+	properties: ["finesse"],
+});
+export const Scimitar = weapon("Scimitar", "martial", [6], "slashing", EWeaponMastery.NICK, 3, 25, {
+	...melee,
+	properties: ["finesse", "light"],
+});
+export const Shortsword = weapon("Shortsword", "martial", [6], "piercing", EWeaponMastery.VEX, 2, 10, {
+	...melee,
+	properties: ["finesse", "light"],
+});
+export const Trident = weapon("Trident", "martial", [8], "piercing", EWeaponMastery.TOPPLE, 4, 5, {
+	...melee,
+	properties: ["thrown", "versatile"],
+	range: thrown20,
+	versatileDamage: [10],
+});
+export const Warhammer = weapon("Warhammer", "martial", [8], "bludgeoning", EWeaponMastery.PUSH, 5, 15, {
+	...melee,
+	properties: ["versatile"],
+	versatileDamage: [10],
+});
+export const WarPick = weapon("War Pick", "martial", [8], "piercing", EWeaponMastery.SAP, 2, 5, {
+	...melee,
+	properties: ["versatile"],
+	versatileDamage: [10],
+});
+export const Whip = weapon("Whip", "martial", [4], "slashing", EWeaponMastery.SLOW, 3, 2, {
+	...melee,
+	properties: ["finesse", "reach"],
+	reach: 10,
+});
+export const Blowgun = weapon("Blowgun", "martial", [], "piercing", EWeaponMastery.VEX, 1, 10, {
+	...ranged,
+	properties: ["ammunition", "loading"],
+	range: { normal: 25, long: 100 },
+	ammunitionKind: "needle",
+	flatDamage: 1,
+});
+export const HandCrossbow = weapon("Hand Crossbow", "martial", [6], "piercing", EWeaponMastery.VEX, 3, 75, {
+	...ranged,
+	properties: ["ammunition", "light", "loading"],
+	range: { normal: 30, long: 120 },
+	ammunitionKind: "bolt",
+});
+export const HeavyCrossbow = weapon("Heavy Crossbow", "martial", [10], "piercing", EWeaponMastery.PUSH, 18, 50, {
+	...ranged,
+	properties: ["ammunition", "heavy", "loading", "two-handed"],
+	range: { normal: 100, long: 400 },
+	ammunitionKind: "bolt",
+});
+export const Longbow = weapon("Longbow", "martial", [8], "piercing", EWeaponMastery.SLOW, 2, 50, {
+	...ranged,
+	properties: ["ammunition", "heavy", "two-handed"],
+	range: { normal: 150, long: 600 },
+	ammunitionKind: "arrow",
+});
+export const Musket = weapon("Musket", "martial", [12], "piercing", EWeaponMastery.SLOW, 10, 500, {
+	...ranged,
+	properties: ["ammunition", "loading", "two-handed"],
+	range: { normal: 40, long: 120 },
+	ammunitionKind: "bullet",
+});
+export const Pistol = weapon("Pistol", "martial", [10], "piercing", EWeaponMastery.VEX, 3, 250, {
+	...ranged,
+	properties: ["ammunition", "loading"],
+	range: { normal: 30, long: 90 },
+	ammunitionKind: "bullet",
+});
 
-/** XPHB p.215 — simple finesse/light/thrown weapon, 1d4 piercing (thrown range 20/60). Mastery: Nick. */
-// export const Dagger = new Weapon(
-// 	"Dagger",
-// 	"Simple Weapon, Melee or Ranged weapon. Finesse, Light, Thrown — thrown range normally 20 ft / 60 ft (normal / long). Mastery: Nick (Weapon Mastery, PHB / XPHB). " +
-// 		"Reference sources also: DrDe-TFV, DrDe-TWoO. Source: XPHB, page 215; SRD 5.2.1 and Basic Rules (2024). Value 200 cp (2 gp).",
-// 	"simple",
-// 	"none",
-// 	200,
-// 	1,
-// 	"light",
-// 	[new Dice(4)],
-// 	"piercing",
-// );
-
-/** XPHB p.215 — martial two-handed melee polearm with reach; 1d10 slashing. Mastery: Graze. */
-export const Glaive = new Weapon(
-	"Glaive",
-	"Martial Weapon, Melee Weapon. Heavy, Reach, Two-Handed. Melee reach with this weapon normally includes an extra 5 ft (Reach property). Damage 1d10 slashing using two hands. Mastery: Graze (Weapon Mastery, PHB / XPHB). " +
-		"Source: XPHB, page 215; SRD 5.2.1 and Basic Rules (2024). Value 2000 cp (20 gp).",
-	"martial",
-	"none",
-	2000,
-	6,
-	"large",
-	[new Dice(10)],
-	"slashing",
-	EWeaponMastery.GRAZE,
-	{ category: "melee", properties: ["heavy", "reach", "two-handed"], reach: 10 },
-);
-
-/** XPHB p.215 — martial heavy two-handed melee axe; 1d12 slashing. Mastery: Cleave. */
-// export const Greataxe = new Weapon(
-// 	"Greataxe",
-// 	"Martial Weapon, Melee Weapon. Heavy, Two-Handed. Damage 1d12 slashing using two hands. Mastery: Cleave (Weapon Mastery, PHB / XPHB). " +
-// 		"Source: XPHB, page 215; SRD 5.2.1 and Basic Rules (2024). Value 3000 cp (30 gp).",
-// 	"martial",
-// 	"none",
-// 	3000,
-// 	7,
-// 	"large",
-// 	[new Dice(12)],
-// 	"slashing",
-// );
-
-/** XPHB p.215 — simple two-handed melee club; 1d8 bludgeoning. Mastery: Push. */
-// export const Greatclub = new Weapon(
-// 	"Greatclub",
-// 	"Simple Weapon, Melee Weapon. Two-Handed — damage is 1d8 bludgeoning when used with both hands on a melee attack. Mastery: Push (Weapon Mastery, PHB / XPHB). " +
-// 		"Reference source also: DrDe-BD. Source: XPHB, page 215; SRD 5.2.1 and Basic Rules (2024). Value 20 cp (2 sp).",
-// 	"simple",
-// 	"none",
-// 	20,
-// 	10,
-// 	"large",
-// 	[new Dice(8)],
-// 	"bludgeoning",
-// );
-
-/** XPHB p.215 — martial heavy two-handed melee sword; 2d6 slashing. Mastery: Graze. */
-export const Greatsword = new Weapon(
-	"Greatsword",
-	"Martial Weapon, Melee Weapon. Heavy, Two-Handed. Damage 2d6 slashing using two hands. Mastery: Graze (Weapon Mastery, PHB / XPHB). " +
-		"Source: XPHB, page 215; SRD 5.2.1 and Basic Rules (2024). Value 5000 cp (50 gp).",
-	"martial",
-	"none",
-	5000,
-	6,
-	"large",
-	[new Dice(6), new Dice(6)],
-	"slashing",
-	EWeaponMastery.GRAZE,
-	{ category: "melee", properties: ["heavy", "two-handed"] },
-);
-
-/** XPHB p.215 — martial heavy two-handed polearm with reach; 1d10 slashing. Mastery: Cleave. */
-// export const Halberd = new Weapon(
-// 	"Halberd",
-// 	"Martial Weapon, Melee Weapon. Heavy, Reach, Two-Handed. Melee reach with this weapon normally includes an extra 5 ft (Reach property). Damage 1d10 slashing using two hands. Mastery: Cleave (Weapon Mastery, PHB / XPHB). " +
-// 		"Source: XPHB, page 215; SRD 5.2.1 and Basic Rules (2024). Value 2000 cp (20 gp).",
-// 	"martial",
-// 	"none",
-// 	2000,
-// 	6,
-// 	"large",
-// 	[new Dice(10)],
-// 	"slashing",
-// );
-
-/** XPHB p.215 — simple light throwable hand axe; melee or thrown 1d6 slashing (20/60). Mastery: Vex. */
-// export const Handaxe = new Weapon(
-// 	"Handaxe",
-// 	"Simple Weapon, Melee or Ranged weapon. Light, Thrown — thrown range normally 20 ft / 60 ft (normal / long). Damage is 1d6 slashing. Mastery: Vex (Weapon Mastery, PHB / XPHB). " +
-// 		"Source: XPHB, page 215; SRD 5.2.1 and Basic Rules (2024). Value 500 cp (5 gp).",
-// 	"simple",
-// 	"none",
-// 	500,
-// 	2,
-// 	"light",
-// 	[new Dice(6)],
-// 	"slashing",
-// );
-
-/** XPHB p.215 — simple light throwable hammer; melee or thrown 1d4 bludgeoning (20/60). Mastery: Nick. */
-// export const LightHammer = new Weapon(
-// 	"Light Hammer",
-// 	"Simple Weapon, Melee or Ranged weapon. Light, Thrown — thrown range normally 20 ft / 60 ft (normal / long). Damage is 1d4 bludgeoning. Mastery: Nick (Weapon Mastery, PHB / XPHB). " +
-// 		"Source: XPHB, page 215; SRD 5.2.1 and Basic Rules (2024). Value 200 cp (2 gp).",
-// 	"simple",
-// 	"none",
-// 	200,
-// 	2,
-// 	"light",
-// 	[new Dice(4)],
-// 	"bludgeoning",
-// );
-
-/** XPHB p.215 — martial versatile melee sword; 1d8 / 1d10 slashing (one / two hands). Mastery: Sap. */
-// export const Longsword = new Weapon(
-// 	"Longsword",
-// 	"Martial Weapon, Melee Weapon. Versatile — one-handed melee 1d8 slashing, two-handed melee 1d10 slashing (parenthetical damage applies when wielding with two hands). Mastery: Sap (Weapon Mastery, PHB / XPHB). " +
-// 		"Reference source also: HotB. Source: XPHB, page 215; SRD 5.2.1 and Basic Rules (2024). Value 1500 cp (15 gp).",
-// 	"martial",
-// 	"none",
-// 	1500,
-// 	3,
-// 	"medium",
-// 	[new Dice(8)],
-// 	"slashing",
-// );
-
-/** XPHB p.215 — simple one-handed melee mace; 1d6 bludgeoning. Mastery: Sap. */
-// export const Mace = new Weapon(
-// 	"Mace",
-// 	"Simple Weapon, Melee Weapon. Damage 1d6 bludgeoning. Mastery: Sap (Weapon Mastery, PHB / XPHB). " +
-// 		"Source: XPHB, page 215; SRD 5.2.1 and Basic Rules (2024). Value 500 cp (5 gp).",
-// 	"simple",
-// 	"none",
-// 	500,
-// 	4,
-// 	"medium",
-// 	[new Dice(6)],
-// 	"bludgeoning",
-// );
-
-/** XPHB p.215 — martial heavy two-handed hammer; 2d6 bludgeoning. Mastery: Topple. */
-export const Maul = new Weapon(
-	"Maul",
-	"Martial Weapon, Melee Weapon. Heavy, Two-Handed. Damage 2d6 bludgeoning using two hands. Mastery: Topple (Weapon Mastery, PHB / XPHB). " +
-		"Reference source also: HotB. Source: XPHB, page 215; SRD 5.2.1 and Basic Rules (2024). Value 1000 cp (10 gp).",
-	"martial",
-	"none",
-	1000,
-	10,
-	"large",
-	[new Dice(6), new Dice(6)],
-	"bludgeoning",
-	EWeaponMastery.TOPPLE,
-	{ category: "melee", properties: ["heavy", "two-handed"] },
-);
-
-/** XPHB p.215 — martial one-handed morningstar; 1d8 piercing. Mastery: Sap. */
-// export const Morningstar = new Weapon(
-// 	"Morningstar",
-// 	"Martial Weapon, Melee Weapon. Damage 1d8 piercing. Mastery: Sap (Weapon Mastery, PHB / XPHB). " +
-// 		"Source: XPHB, page 215; SRD 5.2.1 and Basic Rules (2024). Value 1500 cp (15 gp).",
-// 	"martial",
-// 	"none",
-// 	1500,
-// 	4,
-// 	"medium",
-// 	[new Dice(8)],
-// 	"piercing",
-// );
-
-/** XPHB p.215 — martial heavy two-handed reach polearm; 1d10 piercing. Mastery: Push. */
-// export const Pike = new Weapon(
-// 	"Pike",
-// 	"Martial Weapon, Melee Weapon. Heavy, Reach, Two-Handed. Melee reach with this weapon normally includes an extra 5 ft (Reach property). Damage 1d10 piercing using two hands. Mastery: Push (Weapon Mastery, PHB / XPHB). " +
-// 		"Source: XPHB, page 215; SRD 5.2.1 and Basic Rules (2024). Value 500 cp (5 gp).",
-// 	"martial",
-// 	"none",
-// 	500,
-// 	18,
-// 	"large",
-// 	[new Dice(10)],
-// 	"piercing",
-// );
+/** Order follows the published Weapons table; definitions never contain combat resources. */
+export const weaponCatalog: readonly Weapon[] = Object.freeze([
+	Club,
+	Dagger,
+	Greatclub,
+	Handaxe,
+	Javelin,
+	LightHammer,
+	Mace,
+	Quarterstaff,
+	Sickle,
+	Spear,
+	Dart,
+	LightCrossbow,
+	Shortbow,
+	Sling,
+	Battleaxe,
+	Flail,
+	Glaive,
+	Greataxe,
+	Greatsword,
+	Halberd,
+	Lance,
+	Longsword,
+	Maul,
+	Morningstar,
+	Pike,
+	Rapier,
+	Scimitar,
+	Shortsword,
+	Trident,
+	Warhammer,
+	WarPick,
+	Whip,
+	Blowgun,
+	HandCrossbow,
+	HeavyCrossbow,
+	Longbow,
+	Musket,
+	Pistol,
+]);
