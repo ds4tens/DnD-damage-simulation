@@ -7,17 +7,23 @@ import type Weapon from "../Items/Weapon.ts";
 import type { TConditionState } from "../modifiers/Conditions.ts";
 import type { TCombatModifier } from "../modifiers/Modifiers.ts";
 import type BaseMonster from "../monster/BaseMonster.ts";
+import type { PersistentResourceSnapshot, ResourceDefinition } from "./CombatResources.ts";
 import type { DamageComponent, DamagePool, DamageResult, RolledDamageDie } from "./DamageTypes.ts";
 import type { CombatantState, EffectInput, EncounterState, TimedEffect } from "./EncounterState.ts";
 import type { DeathSaveResult, LifeState, ZeroHpBehavior } from "./HitPointTypes.ts";
-import type { SavingThrowResult } from "./SavingThrowTypes.ts";
+import type { SavingThrowRequest, SavingThrowResult } from "./SavingThrowTypes.ts";
 import type { CombatStrategy } from "./Strategy.ts";
 
 export type CombatantDefinition = BaseCharacter | BaseMonster;
+export type CreatureSize = "tiny" | "small" | "medium" | "large" | "huge" | "gargantuan";
 export type CombatantInput = {
 	id: string;
 	definition: CombatantDefinition;
 	initialClassState?: Record<string, number | boolean | string>;
+	initialResources?: PersistentResourceSnapshot;
+	hitPointMode?: "finite" | "inexhaustible";
+	size?: CreatureSize;
+	initialSpentWeaponInstanceIds?: readonly string[];
 	initialHitPoints?: number;
 	initialTemporaryHp?: number;
 	zeroHpBehavior?: ZeroHpBehavior;
@@ -88,7 +94,10 @@ export type AttackResult = {
 	triggeredAttacks: readonly AttackResult[];
 	limitations: readonly string[];
 	savingThrows?: readonly SavingThrowResult[];
+	additionalDamage?: readonly DamageResult[];
 };
+export type CombatDamageEvent = { actorId: string; targetId: string; source: string; result: DamageResult };
+export type AttackActionOptions = { mode?: AttackMode; weapon?: Weapon; distance?: number; unarmed?: boolean };
 export type AttackActionResult = { totalDamage: number; attacks: readonly AttackResult[] };
 export type TurnStartResult = { ownerId: string; turnId: number; roundNumber: number; deathSave?: DeathSaveResult };
 export type DecisionRecord = { feature: string; choice: boolean | string | null; candidates?: readonly DamagePool[] };
@@ -100,6 +109,10 @@ export type TargetSnapshot = {
 	lifeState?: LifeState;
 	temporaryHp?: number;
 	conditions?: readonly Readonly<TConditionState>[];
+	hitPointMode?: "finite" | "inexhaustible";
+	resources?: PersistentResourceSnapshot;
+	classState?: Readonly<Record<string, number | boolean | string>>;
+	size?: CreatureSize;
 };
 export type ActionSnapshot = {
 	actor: TargetSnapshot;
@@ -123,7 +136,57 @@ export type AttackSnapshot = {
 	hit?: HitResult;
 	actor: TargetSnapshot;
 	target: TargetSnapshot;
+	attackAbility?: TStatsType;
+	attackIndexInTurn?: number;
 };
+export type FeatureActionWindow = "before-attack" | "after-attack";
+export type FeatureSnapshot = {
+	actor: TargetSnapshot;
+	targets: readonly TargetSnapshot[];
+	turnId: number | null;
+	turnOwnerId: string | null;
+	window: FeatureActionWindow | "initiative" | "roll";
+	actionAvailable: boolean;
+	bonusActionAvailable: boolean;
+	roll?: Readonly<{ sides: number; value: number; kind: RollKind }>;
+};
+export type FeatureActionChoice = { id: string; cost: "action" | "bonus-action" | "none"; targetId?: string };
+export type FeatureAction = FeatureActionChoice & {
+	/** These callbacks are trusted rules; candidates expose only detached metadata. */
+	validate?: (ctx: FeatureActionContext) => boolean;
+	execute?: (ctx: FeatureActionContext) => void;
+	attack?: AttackSelection;
+};
+export type FeatureActionContext = {
+	actorId: string;
+	actor: CombatantDefinition;
+	encounter: EncounterState;
+	roller: DiceRoller;
+	window: FeatureActionWindow;
+	useFeature(featureId: string): boolean;
+	chooseOption(featureId: string, candidates: readonly string[]): string | null;
+	resolveSavingThrow(request: SavingThrowRequest): SavingThrowResult;
+	dealDamage(targetId: string, components: readonly DamageComponent[]): DamageResult;
+	distanceTo(targetId: string): number | undefined;
+};
+export type FeatureActionResult = {
+	featureId: string;
+	actorId: string;
+	decisions: readonly DecisionRecord[];
+	attacks: readonly AttackResult[];
+};
+export type RollKind = "attack" | "damage" | "saving-throw" | "initiative" | "feature";
+export type RollContext = {
+	actorId: string;
+	actor: CombatantDefinition;
+	encounter: EncounterState;
+	/** Raw roller: replacements never recursively trigger the same window. */
+	roller: DiceRoller;
+	kind: RollKind;
+	useFeature(featureId: string): boolean;
+	chooseOption(featureId: string, candidates: readonly string[]): string | null;
+};
+export type SaveEventContext = RollContext & { request: Readonly<SavingThrowRequest> };
 export type AttackContext = {
 	encounter: EncounterState;
 	roller: DiceRoller;
@@ -146,6 +209,13 @@ export type AttackContext = {
 	hasUsed(featureId: string): boolean;
 	markUsed(featureId: string): void;
 	useFeature(featureId: string): boolean;
+	chooseOption(featureId: string, candidates: readonly string[]): string | null;
+	resolveSavingThrow(request: SavingThrowRequest): SavingThrowResult;
+	dealDamage(targetId: string, components: readonly DamageComponent[]): DamageResult;
+	d20Mode(
+		first: number,
+		mode: { advantage: boolean; disadvantage: boolean },
+	): { advantage: boolean; disadvantage: boolean };
 	chooseWeaponRoll(candidates: readonly DamagePool[]): number;
 	choosePunctureDie(dice: readonly RolledDamageDie[]): string | null;
 	choosePiercerCriticalDie(dice: readonly RolledDamageDie[]): string | null;
@@ -158,6 +228,20 @@ export type TriggeredAttack = { targetId: string; source: string };
 export type CombatHook = {
 	id: string;
 	featName?: FeatName;
+	/** Passive pools, called once per participant when an engine is created. */
+	resourceDefinitions?: (definition: CombatantDefinition) => readonly ResourceDefinition[];
+	featureActions?: (ctx: FeatureActionContext) => readonly FeatureAction[];
+	rollDie?: (ctx: RollContext, roll: Readonly<{ sides: number; value: number; kind: RollKind }>) => number;
+	d20Mode?: (
+		ctx: RollContext,
+		first: number,
+		mode: Readonly<{ advantage: boolean; disadvantage: boolean }>,
+	) => { advantage: boolean; disadvantage: boolean };
+	startTurn?: (ctx: FeatureActionContext) => void;
+	endTurn?: (ctx: FeatureActionContext) => void;
+	onInitiative?: (ctx: RollContext) => void;
+	afterHit?: (ctx: HitContext) => HitResult;
+	afterSavingThrow?: (ctx: SaveEventContext, result: SavingThrowResult) => SavingThrowResult;
 	applies?: (ctx: AttackContext) => boolean;
 	attackModifiers?: (ctx: AttackContext) => readonly TCombatModifier[];
 	weaponDamage?: (ctx: HitContext, pool: DamagePool) => DamagePool;

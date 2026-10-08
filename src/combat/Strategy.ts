@@ -1,7 +1,21 @@
-import type { ActionSnapshot, AttackSelection, AttackSnapshot, TargetSnapshot } from "./CombatTypes.ts";
+import type {
+	ActionSnapshot,
+	AttackSelection,
+	AttackSnapshot,
+	FeatureActionChoice,
+	FeatureSnapshot,
+	TargetSnapshot,
+} from "./CombatTypes.ts";
 import type { DamagePool, RolledDamageDie } from "./DamageTypes.ts";
 
 export interface CombatStrategy {
+	useOptionalFeature(snapshot: Readonly<FeatureSnapshot>, featureId: string): boolean;
+	chooseFeatureOption(
+		snapshot: Readonly<FeatureSnapshot | AttackSnapshot>,
+		featureId: string,
+		candidates: readonly string[],
+	): string | null;
+	chooseFeatureAction(snapshot: Readonly<FeatureSnapshot>, candidates: readonly FeatureActionChoice[]): string | null;
 	useFeature(snapshot: Readonly<AttackSnapshot>, featureId: string): boolean;
 	chooseWeaponRoll(snapshot: Readonly<AttackSnapshot>, candidates: readonly DamagePool[]): number;
 	choosePunctureDie(snapshot: Readonly<AttackSnapshot>, dice: readonly RolledDamageDie[]): string | null;
@@ -20,6 +34,9 @@ export function poolTotal(pool: DamagePool): number {
 }
 /** Stable tie breaking never consumes randomness or reveals future rolls. */
 export const defaultStrategy: CombatStrategy = {
+	useOptionalFeature: () => true,
+	chooseFeatureOption: (_snapshot, _featureId, candidates) => candidates[0] ?? null,
+	chooseFeatureAction: (_snapshot, candidates) => candidates[0]?.id ?? null,
 	useFeature: () => true,
 	chooseWeaponRoll: (_snapshot, candidates) => {
 		let bestIndex = 0;

@@ -9,6 +9,10 @@ export function resolveSavingThrow(
 	encounter: EncounterState,
 	request: SavingThrowRequest,
 	roller: DiceRoller,
+	modifyMode?: (
+		first: number,
+		mode: { advantage: boolean; disadvantage: boolean },
+	) => { advantage: boolean; disadvantage: boolean },
 ): SavingThrowResult {
 	const definition = encounter.definition(request.targetId);
 	const conditions = encounter.state(request.targetId).conditions;
@@ -21,8 +25,10 @@ export function resolveSavingThrow(
 	)
 		throw new Error("Invalid saving throw request");
 	const modifiers = savingThrowConditionModifiers(conditions, request.ability);
+	const effectDisadvantage = encounter.effectsOn(request.targetId).some((effect) => effect.savingThrowDisadvantage);
 	const bonus = definition.getSavingThrowBonus(request.ability) + (request.bonus ?? 0) + exhaustionPenalty(conditions);
 	const base = { targetId: request.targetId, ability: request.ability, dc: request.dc, source: request.source, bonus };
+	encounter.consumeSavingThrowEffects(request.targetId);
 	if (request.voluntaryFailure || modifiers.automaticFailure)
 		return {
 			...base,
@@ -35,7 +41,8 @@ export function resolveSavingThrow(
 	const rolls = rollD20Test(
 		roller,
 		request.advantage ?? false,
-		(request.disadvantage ?? false) || modifiers.disadvantage,
+		(request.disadvantage ?? false) || modifiers.disadvantage || effectDisadvantage,
+		modifyMode,
 	);
 	const total = rolls.natural + bonus;
 	return {
@@ -48,8 +55,17 @@ export function resolveSavingThrow(
 	};
 }
 
-export function rollD20Test(roller: DiceRoller, advantage = false, disadvantage = false) {
+export function rollD20Test(
+	roller: DiceRoller,
+	advantage = false,
+	disadvantage = false,
+	modifyMode?: (
+		first: number,
+		mode: { advantage: boolean; disadvantage: boolean },
+	) => { advantage: boolean; disadvantage: boolean },
+) {
 	const first = roller.roll(20);
+	if (modifyMode) ({ advantage, disadvantage } = modifyMode(first, { advantage, disadvantage }));
 	const d20Rolls = [first];
 	if (advantage !== disadvantage) d20Rolls.push(roller.roll(20));
 	return { d20Rolls, natural: advantage && !disadvantage ? Math.max(...d20Rolls) : Math.min(...d20Rolls) };

@@ -29,7 +29,12 @@ function permutation(order: readonly string[], encounter: EncounterState): void 
 		throw new Error("Initiative order must include each participant exactly once");
 }
 /** Basic Rules 2024 Playing the Game: Initiative/Your Turn; verified 2026-10-08. */
-export function rollInitiative(encounter: EncounterState, roller: DiceRoller, options: InitiativeOptions = {}) {
+export function rollInitiative(
+	encounter: EncounterState,
+	roller: DiceRoller,
+	options: InitiativeOptions = {},
+	engine?: CombatEngine,
+) {
 	if (options.order) {
 		permutation(options.order, encounter);
 		return {
@@ -87,7 +92,12 @@ export function rollInitiative(encounter: EncounterState, roller: DiceRoller, op
 		if (results.has(actorId)) continue;
 		const profile = profiles.get(actorId);
 		if (!profile) throw new Error("Unknown Initiative participant");
-		const rolled = rollD20Test(roller, profile.advantage, profile.disadvantage);
+		const rolled = rollD20Test(
+			engine?.actorRoller(actorId, "initiative") ?? roller,
+			profile.advantage,
+			profile.disadvantage,
+			engine ? (first, mode) => engine.modifyD20Mode(actorId, "initiative", first, mode) : undefined,
+		);
 		for (const id of groups.get(actorId) ?? [actorId])
 			results.set(id, {
 				actorId: id,
@@ -120,11 +130,12 @@ export class EncounterScheduler {
 		options: InitiativeOptions = {},
 	) {
 		engine.assertCanAttachScheduler();
-		const initiative = rollInitiative(engine.encounter, roller, options);
+		const initiative = rollInitiative(engine.encounter, roller, options, engine);
 		engine.encounter.setLifecycleMode("scheduled");
 		this.order = initiative.order;
 		this.initiative = initiative.rolls;
 		engine.attachScheduler(this);
+		engine.processScheduledInitiative(this);
 	}
 	get roundNumber(): number {
 		return this.currentRound;

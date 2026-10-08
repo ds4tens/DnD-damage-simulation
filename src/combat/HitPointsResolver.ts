@@ -66,6 +66,23 @@ export function applyDamage(
 	const previousTemporaryHp = state.temporaryHp;
 	const previousLifeState = state.lifeState;
 	const previousDeathSaves = { ...state.deathSaves };
+	if (encounter.hitPointMode(targetId) === "inexhaustible")
+		return {
+			targetId,
+			previousHp,
+			currentHp: previousHp,
+			damageTaken: damage,
+			hpLost: 0,
+			reducedToZero: false,
+			previousTemporaryHp,
+			currentTemporaryHp: previousTemporaryHp,
+			temporaryHpLost: 0,
+			overflow: 0,
+			previousLifeState,
+			currentLifeState: previousLifeState,
+			previousDeathSaves,
+			currentDeathSaves: { ...previousDeathSaves },
+		};
 	const temporaryHpLost = Math.min(previousTemporaryHp, damage);
 	const hpDamage = damage - temporaryHpLost;
 	state.temporaryHp -= temporaryHpLost;
@@ -137,6 +154,8 @@ export function grantTemporaryHp(
 	replace: boolean,
 ): TemporaryHpEvent {
 	validAmount(amount);
+	if (encounter.hitPointMode(targetId) === "inexhaustible")
+		throw new Error("Inexhaustible targets cannot receive Temporary HP");
 	const state = encounter.state(targetId);
 	const previousTemporaryHp = state.temporaryHp;
 	if (replace) state.temporaryHp = amount;

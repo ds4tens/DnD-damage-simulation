@@ -5,8 +5,10 @@ import { weaponMasteryRegistry } from "../Items/Weapon/WeaponMastery.ts";
 import type Weapon from "../Items/Weapon.ts";
 import { conditionRegistry } from "../modifiers/Conditions.ts";
 import { mergeCombatModifiers, type TCombatModifier } from "../modifiers/Modifiers.ts";
+import { type PersistentCombatantState, type RecoveryEvent, recoverResources } from "./CombatResources.ts";
 import type {
 	AttackActionHandle,
+	AttackActionOptions,
 	AttackActionResult,
 	AttackContext,
 	AttackGrant,
@@ -15,16 +17,26 @@ import type {
 	AttackSelection,
 	AttackSnapshot,
 	CleaveCandidate,
+	CombatDamageEvent,
 	CombatEngineOptions,
 	CombatHook,
+	DecisionRecord,
+	FeatureAction,
+	FeatureActionChoice,
+	FeatureActionContext,
+	FeatureActionResult,
+	FeatureActionWindow,
+	FeatureSnapshot,
 	HitContext,
 	HitResult,
 	PreparedWeaponAttack,
+	RollContext,
+	RollKind,
 	TurnContext,
 	TurnStartResult,
 } from "./CombatTypes.ts";
 import { allDamageDice, resolveDamage, rollDamageComponents, validateDamagePool } from "./DamageResolver.ts";
-import type { DamageComponent, DamagePool, RolledDamageDie } from "./DamageTypes.ts";
+import type { DamageComponent, DamagePool, DamageResult, RolledDamageDie } from "./DamageTypes.ts";
 import { damageTypes } from "./DamageTypes.ts";
 import { EncounterScheduler, type InitiativeOptions } from "./EncounterScheduler.ts";
 import type { EncounterState } from "./EncounterState.ts";
@@ -66,17 +78,22 @@ export function collectAttackConditionModifiers(ctx: AttackContext): TCombatModi
 export function rollAttackD20(
 	modifier: TCombatModifier,
 	roller: DiceRoller,
+	modifyMode?: (
+		first: number,
+		mode: { advantage: boolean; disadvantage: boolean },
+	) => { advantage: boolean; disadvantage: boolean },
 ): { natural: number; rolls: readonly number[] } {
-	const advantage = (modifier.attackRoll?.advantage ?? 0) > 0;
-	const disadvantage = (modifier.attackRoll?.disadvantage ?? 0) > 0;
+	let advantage = (modifier.attackRoll?.advantage ?? 0) > 0;
+	let disadvantage = (modifier.attackRoll?.disadvantage ?? 0) > 0;
 	const first = roller.roll(20);
+	if (modifyMode) ({ advantage, disadvantage } = modifyMode(first, { advantage, disadvantage }));
 	if (advantage === disadvantage) return { natural: first, rolls: [first] };
 	const second = roller.roll(20);
 	return { natural: advantage ? Math.max(first, second) : Math.min(first, second), rolls: [first, second] };
 }
 /** Basic Rules 2024 Rules Glossary, Attack Roll/Critical Hit; verified 2026-10-08. */
 export function resolveHit(ctx: AttackContext, modifier: TCombatModifier): HitResult {
-	const { natural, rolls } = rollAttackD20(modifier, ctx.roller);
+	const { natural, rolls } = rollAttackD20(modifier, ctx.roller, ctx.d20Mode);
 	const character = ctx.character;
 	const bonus =
 		ctx.preparedWeapon?.attackBonus ??
@@ -115,6 +132,16 @@ export class CombatEngine {
 	private nextActionId = 1;
 	private nextGrantId = 1;
 	private scheduler: EncounterScheduler | undefined;
+	private initiativeProcessed = false;
+	private readonly damageLedger: CombatDamageEvent[] = [];
+	get damageEvents(): readonly CombatDamageEvent[] {
+		return freezeSnapshot(structuredClone(this.damageLedger));
+	}
+	private damage(actorId: string, targetId: string, pool: DamagePool, source: string, critical = false) {
+		const result = resolveDamage(this.encounter, targetId, pool, { critical });
+		this.damageLedger.push({ actorId, targetId, source, result: structuredClone(result) });
+		return result;
+	}
 	constructor(
 		encounter: EncounterState,
 		private readonly options: CombatEngineOptions,
@@ -130,6 +157,9 @@ export class CombatEngine {
 		for (const id of encounter.ids) {
 			validateMasterySelections(encounter, id);
 			const definition = encounter.definition(id);
+			for (const hook of this.hooksForActor(id))
+				for (const resource of hook.resourceDefinitions?.(definition) ?? []) encounter.initializeResource(id, resource);
+			encounter.validateInitialResources(id);
 			if (definition instanceof BaseCharacter)
 				for (const feat of definition.feats) {
 					if (feat.name !== "ability-score-improvement" && !this.hooks.some((hook) => hook.featName === feat.name))
@@ -144,11 +174,18 @@ export class CombatEngine {
 	}
 	endTurn(): void {
 		if (this.scheduler) throw new Error("Manual and scheduled turns cannot mix");
+		this.closeTurn();
+	}
+	private closeTurn(): void {
+		const actorId = this.encounter.turn.ownerId;
+		const ctx = this.featureContext(actorId, "after-attack", []);
+		for (const hook of this.hooksForActor(actorId)) hook.endTurn?.(ctx);
 		this.encounter.endTurn();
 	}
 	private openTurn(ownerId: string): TurnStartResult {
 		const turn = this.encounter.beginTurn(ownerId);
 		const state = this.encounter.state(ownerId);
+		for (const hook of this.hooksForActor(ownerId)) hook.startTurn?.(this.featureContext(ownerId, "before-attack", []));
 		return {
 			ownerId,
 			turnId: turn.id,
@@ -183,10 +220,233 @@ export class CombatEngine {
 	}
 	endScheduledTurn(scheduler: EncounterScheduler): void {
 		if (this.scheduler !== scheduler) throw new Error("Invalid scheduled turn");
-		this.encounter.endTurn();
+		this.closeTurn();
 	}
 	resolveSavingThrow(request: SavingThrowRequest) {
-		return resolveSavingThrow(this.encounter, request, this.options.roller);
+		let result = resolveSavingThrow(
+			this.encounter,
+			request,
+			this.actorRoller(request.targetId, "saving-throw"),
+			(first, mode) => this.modifyD20Mode(request.targetId, "saving-throw", first, mode),
+		);
+		for (const actorId of this.encounter.ids)
+			for (const hook of this.hooksForActor(actorId))
+				result =
+					hook.afterSavingThrow?.(
+						{ ...this.rollContext(actorId, "saving-throw"), request: Object.freeze({ ...request }) },
+						result,
+					) ?? result;
+		return result;
+	}
+	private hooksForActor(actorId: string): readonly CombatHook[] {
+		const actor = this.encounter.definition(actorId);
+		return this.hooks.filter(
+			(hook) =>
+				hook.featName === undefined ||
+				(actor instanceof BaseCharacter && actor.feats.some((feat) => feat.name === hook.featName)),
+		);
+	}
+	private featureSnapshot(
+		actorId: string,
+		window: FeatureSnapshot["window"],
+		roll?: FeatureSnapshot["roll"],
+	): Readonly<FeatureSnapshot> {
+		const active = this.encounter.hasActiveTurn;
+		return freezeSnapshot({
+			actor: this.encounter.snapshot(actorId),
+			targets: this.encounter.ids.filter((id) => id !== actorId).map((id) => this.encounter.snapshot(id)),
+			turnId: active ? this.encounter.turn.id : null,
+			turnOwnerId: active ? this.encounter.turn.ownerId : null,
+			window,
+			actionAvailable: active && this.encounter.canUseAction(actorId),
+			bonusActionAvailable: active && this.encounter.canUseBonusAction(actorId),
+			...(roll ? { roll: { ...roll } } : {}),
+		});
+	}
+	private chooseOption(
+		snapshot: Readonly<FeatureSnapshot | AttackSnapshot>,
+		featureId: string,
+		candidates: readonly string[],
+	): string | null {
+		const choice = this.strategy.chooseFeatureOption(snapshot, featureId, Object.freeze([...candidates]));
+		if (choice !== null && !candidates.includes(choice)) throw new Error(`Invalid feature option: ${featureId}`);
+		return choice;
+	}
+	private rollContext(actorId: string, kind: RollKind, roll?: FeatureSnapshot["roll"]): RollContext {
+		return {
+			actorId,
+			actor: this.encounter.definition(actorId),
+			encounter: this.encounter,
+			roller: this.options.roller,
+			kind,
+			useFeature: (id) => {
+				const choice = this.strategy.useOptionalFeature(
+					this.featureSnapshot(actorId, kind === "initiative" ? "initiative" : "roll", roll),
+					id,
+				);
+				if (typeof choice !== "boolean") throw new Error("Invalid optional feature choice");
+				return choice;
+			},
+			chooseOption: (id, candidates) => this.chooseOption(this.featureSnapshot(actorId, "roll", roll), id, candidates),
+		};
+	}
+	actorRoller(actorId: string, kind: RollKind): DiceRoller {
+		return {
+			roll: (sides) => {
+				let value = this.options.roller.roll(sides);
+				for (const hook of this.hooksForActor(actorId)) {
+					value =
+						hook.rollDie?.(
+							this.rollContext(actorId, kind, { sides, value, kind }),
+							Object.freeze({ sides, value, kind }),
+						) ?? value;
+					if (!Number.isSafeInteger(value) || value < 1 || value > sides)
+						throw new Error("Invalid feature die replacement");
+				}
+				return value;
+			},
+		};
+	}
+	modifyD20Mode(actorId: string, kind: RollKind, first: number, mode: { advantage: boolean; disadvantage: boolean }) {
+		let result = { ...mode };
+		for (const hook of this.hooksForActor(actorId))
+			result =
+				hook.d20Mode?.(
+					this.rollContext(actorId, kind, { sides: 20, value: first, kind }),
+					first,
+					Object.freeze({ ...result }),
+				) ?? result;
+		if (typeof result.advantage !== "boolean" || typeof result.disadvantage !== "boolean")
+			throw new Error("Invalid D20 mode");
+		return result;
+	}
+	processScheduledInitiative(scheduler: EncounterScheduler): void {
+		if (this.scheduler !== scheduler || this.initiativeProcessed)
+			throw new Error("Invalid or repeated Initiative event");
+		this.initiativeProcessed = true;
+		for (const result of scheduler.initiative)
+			if (result.natural !== null)
+				for (const hook of this.hooksForActor(result.actorId))
+					hook.onInitiative?.(this.rollContext(result.actorId, "initiative"));
+	}
+	private featureContext(
+		actorId: string,
+		window: FeatureActionWindow,
+		decisions: DecisionRecord[],
+	): FeatureActionContext {
+		return {
+			actorId,
+			actor: this.encounter.definition(actorId),
+			encounter: this.encounter,
+			roller: this.actorRoller(actorId, "feature"),
+			window,
+			useFeature: (id) => {
+				const choice = this.strategy.useOptionalFeature(this.featureSnapshot(actorId, window), id);
+				if (typeof choice !== "boolean") throw new Error("Invalid optional feature choice");
+				decisions.push({ feature: id, choice });
+				return choice;
+			},
+			chooseOption: (id, candidates) => {
+				const choice = this.chooseOption(this.featureSnapshot(actorId, window), id, candidates);
+				decisions.push({ feature: id, choice });
+				return choice;
+			},
+			resolveSavingThrow: (request) => this.resolveSavingThrow(request),
+			dealDamage: (targetId, components) =>
+				this.damage(
+					actorId,
+					targetId,
+					rollDamageComponents(components, false, this.actorRoller(actorId, "damage")),
+					components.map((component) => component.source).join("+"),
+				),
+			distanceTo: (targetId) => this.options.distanceFor?.(actorId, targetId),
+		};
+	}
+	private featureActions(
+		actorId: string,
+		window: FeatureActionWindow,
+		ctx: FeatureActionContext,
+	): readonly FeatureAction[] {
+		if (!this.canAct(actorId) || this.encounter.turn.ownerId !== actorId) return [];
+		return this.hooksForActor(actorId)
+			.flatMap((hook) => hook.featureActions?.(ctx) ?? [])
+			.filter(
+				(action) =>
+					!this.encounter.hasUsed(actorId, `feature-action.${window}.${action.id}`) &&
+					(action.cost !== "action" || this.encounter.canUseAction(actorId)) &&
+					(action.cost !== "bonus-action" || this.encounter.canUseBonusAction(actorId)) &&
+					(action.validate?.(ctx) ?? true),
+			);
+	}
+	resolveFeatureActions(actorId: string, window: FeatureActionWindow): readonly FeatureActionResult[] {
+		const results: FeatureActionResult[] = [];
+		for (let guard = 0; guard < 32; guard++) {
+			const decisions: DecisionRecord[] = [];
+			const ctx = this.featureContext(actorId, window, decisions);
+			const actions = this.featureActions(actorId, window, ctx);
+			if (actions.length === 0) break;
+			if (new Set(actions.map((action) => action.id)).size !== actions.length)
+				throw new Error("Duplicate feature action IDs");
+			const candidates: FeatureActionChoice[] = actions.map(({ id, cost, targetId }) => ({
+				id,
+				cost,
+				...(targetId ? { targetId } : {}),
+			}));
+			const id = this.strategy.chooseFeatureAction(this.featureSnapshot(actorId, window), freezeSnapshot(candidates));
+			if (id === null) break;
+			const action = actions.find((candidate) => candidate.id === id);
+			if (!action) throw new Error("Invalid feature action choice");
+			const attacks: AttackResult[] = [];
+			if (action.attack) {
+				if (action.cost !== "bonus-action") throw new Error("Feature attack must use Bonus Action");
+				const request = this.normalized({ ...action.attack, actorId, actionSource: "bonus-action" });
+				this.validateAttack(request);
+				const grant = this.issueGrant(request);
+				attacks.push(this.resolveSingleAttack({ ...request, grant }, id));
+			} else {
+				if (action.cost === "action") this.encounter.spendAction(actorId);
+				if (action.cost === "bonus-action") this.encounter.spendBonusAction(actorId);
+			}
+			this.encounter.markUsed(actorId, `feature-action.${window}.${id}`);
+			action.execute?.(ctx);
+			decisions.push({ feature: id, choice: true });
+			results.push({ featureId: id, actorId, decisions, attacks });
+		}
+		return structuredClone(results);
+	}
+	exportPersistentState(actorId: string): PersistentCombatantState {
+		return freezeSnapshot({
+			resources: this.encounter.resourceSnapshot(actorId),
+			classState: Object.fromEntries(
+				Object.entries(this.encounter.state(actorId).classState).filter(([key]) => key.startsWith("persistent.")),
+			),
+			spentWeaponInstanceIds: [...this.encounter.state(actorId).spentWeaponInstanceIds],
+		});
+	}
+	recoverResources(actorId: string, event: RecoveryEvent) {
+		if (this.encounter.hasActiveTurn) throw new Error("Recovery requires no active turn");
+		return recoverResources(this.encounter, actorId, event);
+	}
+	advanceElapsedTime(minutes: number): void {
+		if (this.encounter.hasActiveTurn || !Number.isFinite(minutes) || minutes < 0)
+			throw new Error("Invalid elapsed time advance");
+		for (const id of this.encounter.ids) {
+			const state = this.encounter.state(id).classState;
+			if (minutes >= 10) {
+				state.raging = false;
+				delete state["barbarian.rageExpiresOwnTurn"];
+			}
+		}
+	}
+	standUp(actorId: string): boolean {
+		if (this.encounter.turn.ownerId !== actorId || !this.canAct(actorId)) return false;
+		const speed = this.encounter.effectiveSpeed(actorId);
+		if (speed <= 0 || this.encounter.turn.movementSpent + speed / 2 > speed) return false;
+		const state = this.encounter.state(actorId);
+		if (!state.conditions.some((condition) => condition.name === "prone")) return false;
+		this.encounter.turn.movementSpent += speed / 2;
+		state.conditions = state.conditions.filter((condition) => condition.name !== "prone");
+		return true;
 	}
 	heal(targetId: string, amount: number) {
 		return heal(this.encounter, targetId, amount);
@@ -230,7 +490,9 @@ export class CombatEngine {
 		const entry = this.actionEntry(action);
 		entry.closed = true;
 		const total = (attack: AttackResult): number =>
-			(attack.damage?.appliedDamage ?? 0) + attack.triggeredAttacks.reduce((sum, child) => sum + total(child), 0);
+			(attack.damage?.appliedDamage ?? 0) +
+			(attack.additionalDamage ?? []).reduce((sum, damage) => sum + damage.appliedDamage, 0) +
+			attack.triggeredAttacks.reduce((sum, child) => sum + total(child), 0);
 		return structuredClone({
 			totalDamage: entry.attacks.reduce((sum, attack) => sum + total(attack), 0),
 			attacks: entry.attacks,
@@ -461,6 +723,11 @@ export class CombatEngine {
 				return false;
 			if (request.distance !== undefined && (!Number.isFinite(request.distance) || request.distance < 0)) return false;
 			if (!request.weapon && !request.weaponInstanceId && !request.profile) return false;
+			if (
+				request.profile?.damage.some((component) => component.origin === "unarmed") &&
+				(request.mode !== "melee" || (request.distance ?? 5) > 5)
+			)
+				return false;
 			this.prepared(request);
 			return this.options.canAttack?.(request, this.encounter) ?? true;
 		} catch {
@@ -483,6 +750,8 @@ export class CombatEngine {
 				? { weapon: { name: ctx.weapon.name, category: ctx.weapon.category, properties: [...ctx.weapon.properties] } }
 				: {}),
 			...(ctx.hit ? { hit: structuredClone(ctx.hit) } : {}),
+			attackAbility: ctx.attackAbility,
+			attackIndexInTurn: ctx.attackIndexInTurn,
 		});
 	}
 	private context(request: AttackRequest, attackIndexInTurn: number, prepared?: PreparedWeaponAttack): AttackContext {
@@ -490,7 +759,7 @@ export class CombatEngine {
 		const character = attacker instanceof BaseCharacter ? attacker : undefined;
 		const ctx: AttackContext = {
 			encounter: this.encounter,
-			roller: this.options.roller,
+			roller: this.actorRoller(request.actorId, "attack"),
 			attacker,
 			character,
 			canSee: (observerId, targetId) =>
@@ -511,6 +780,20 @@ export class CombatEngine {
 			isOwnTurn: this.encounter.turn.ownerId === request.actorId,
 			hasUsed: (feature) => this.encounter.hasUsed(request.actorId, feature),
 			markUsed: (feature) => this.encounter.markUsed(request.actorId, feature),
+			chooseOption: (feature, candidates) => {
+				const choice = this.chooseOption(this.snapshot(ctx), feature, candidates);
+				ctx.decisions.push({ feature, choice });
+				return choice;
+			},
+			resolveSavingThrow: (input) => this.resolveSavingThrow(input),
+			dealDamage: (targetId, components) =>
+				this.damage(
+					request.actorId,
+					targetId,
+					rollDamageComponents(components, false, this.actorRoller(request.actorId, "damage")),
+					components.map((component) => component.source).join("+"),
+				),
+			d20Mode: (first, mode) => this.modifyD20Mode(request.actorId, "attack", first, mode),
 			useFeature: (feature) => {
 				const choice = this.strategy.useFeature(this.snapshot(ctx), feature);
 				if (typeof choice !== "boolean") throw new Error("Strategy must return a boolean feature choice");
@@ -648,6 +931,19 @@ export class CombatEngine {
 		}
 		const attack = this.encounter.nextAttack(request.actorId);
 		const ctx = this.context(request, attack.index, prepared);
+		const additionalDamage: DamageResult[] = [];
+		const savingThrows: ReturnType<typeof resolveSavingThrow>[] = [];
+		const originalDealDamage = ctx.dealDamage;
+		ctx.dealDamage = (targetId, components) => {
+			const result = originalDealDamage(targetId, components);
+			additionalDamage.push(result);
+			return result;
+		};
+		ctx.resolveSavingThrow = (request) => {
+			const result = this.resolveSavingThrow(request);
+			savingThrows.push(result);
+			return result;
+		};
 		const hooks = this.activeHooks(ctx);
 		const classModifiers = ctx.character?.characterClass.getAttackModifiers(ctx) ?? [];
 		const modifier = mergeCombatModifiers([
@@ -658,12 +954,16 @@ export class CombatEngine {
 			...hooks.flatMap((hook) => hook.attackModifiers?.(ctx) ?? []),
 		]);
 		this.encounter.consumeAttackEffects(request.actorId, request.targetId);
-		const hit = resolveHit(ctx, modifier);
+		let hit = resolveHit(ctx, modifier);
+		for (const hook of hooks) {
+			ctx.hit = hit;
+			hit = hook.afterHit?.({ ...ctx, hit }) ?? hit;
+		}
 		ctx.hit = hit;
 		const hitCtx: HitContext = { ...ctx, hit };
 		let pool: DamagePool = [];
 		if (hit.isHit) {
-			pool = rollDamageComponents(this.weaponComponents(ctx), hit.isCrit, this.options.roller);
+			pool = rollDamageComponents(this.weaponComponents(ctx), hit.isCrit, this.actorRoller(request.actorId, "damage"));
 			for (const hook of hooks) pool = hook.weaponDamage?.(hitCtx, pool) ?? pool;
 			const classDamageModifiers = ctx.character?.characterClass.getDamageRollModifiers(hitCtx) ?? [];
 			const extraComponents: DamageComponent[] = [
@@ -673,7 +973,10 @@ export class CombatEngine {
 				),
 				...hooks.flatMap((hook) => hook.damageComponents?.(hitCtx) ?? []),
 			];
-			pool = [...pool, ...rollDamageComponents(extraComponents, hit.isCrit, this.options.roller)];
+			pool = [
+				...pool,
+				...rollDamageComponents(extraComponents, hit.isCrit, this.actorRoller(request.actorId, "damage")),
+			];
 			for (const hook of hooks) pool = hook.additionalCriticalDice?.(hitCtx, pool) ?? pool;
 			for (const hook of hooks) pool = hook.afterDamageRoll?.(hitCtx, pool) ?? pool;
 			validateDamagePool(pool);
@@ -685,11 +988,11 @@ export class CombatEngine {
 				...(modifier.miss?.componentFns?.flatMap((fn) => fn(hitCtx)) ?? []),
 				...masteryMissComponents(ctx),
 			];
-			pool = rollDamageComponents(missComponents, false, this.options.roller);
+			pool = rollDamageComponents(missComponents, false, this.actorRoller(request.actorId, "damage"));
 		}
 		const damage =
 			hit.isHit || pool.length > 0
-				? resolveDamage(this.encounter, request.targetId, pool, { critical: hit.isCrit })
+				? this.damage(request.actorId, request.targetId, pool, source, hit.isCrit)
 				: undefined;
 		if (hit.isHit) this.encounter.turn.hitActors.add(request.actorId);
 		const triggeredAttacks: AttackResult[] = [];
@@ -715,6 +1018,8 @@ export class CombatEngine {
 			triggeredAttacks,
 			limitations: [...(ctx.character?.characterClass.unsupportedFeatures ?? []), ...(prepared?.limitations ?? [])],
 			...(prepared ? { weaponInstanceId: prepared.instance.id } : {}),
+			additionalDamage,
+			savingThrows,
 		};
 		const mastery = resolveMasteryHit(ctx, result, { save: (save) => this.resolveSavingThrow(save) });
 		for (const effect of mastery.effects ?? []) this.encounter.addEffect(effect);
@@ -722,7 +1027,7 @@ export class CombatEngine {
 			if (!ctx.targetState.conditions.some((existing) => existing.name === condition.name))
 				ctx.targetState.conditions.push({ ...condition });
 		}
-		if (mastery.savingThrows) result.savingThrows = mastery.savingThrows;
+		if (mastery.savingThrows) savingThrows.push(...mastery.savingThrows);
 		if (
 			request.action &&
 			request.actionSource === "attack-action" &&
@@ -762,6 +1067,8 @@ export class CombatEngine {
 		)
 			throw new Error("Invalid simultaneous trigger order");
 		for (const id of ordered) triggers.get(id)?.();
+		if (savingThrows.length === 0) delete result.savingThrows;
+		if (additionalDamage.length === 0) delete result.additionalDamage;
 		// Keep outcome data detached from later hooks/turns and strategy references.
 		if (request.action && !request.grant) this.actionEntry(request.action).attacks.push(result);
 		if (implicitAction) this.finishAttackAction(implicitAction);
@@ -898,7 +1205,7 @@ export class CombatEngine {
 		action: AttackActionHandle | undefined,
 		actorId: string,
 		preferredTargetId: string,
-		options: { mode?: AttackRequest["mode"]; weapon?: Weapon; distance?: number },
+		options: AttackActionOptions,
 	): AttackSelection[] {
 		const actor = this.encounter.definition(actorId);
 		const preferred = options.weapon ?? (actor instanceof BaseCharacter ? actor.weapon : undefined);
@@ -912,6 +1219,40 @@ export class CombatEngine {
 		const opportunity = this.lightOpportunities.get(actorId);
 		const additional = !!action && opportunity?.action === action && !this.encounter.hasUsed(actorId, "weapon.light");
 		const candidates: AttackSelection[] = [];
+		if (options.unarmed && primary && actor instanceof BaseCharacter) {
+			for (const targetId of targets) {
+				const selection: AttackSelection = {
+					targetId,
+					mode: "melee",
+					ability: "strength",
+					profile: {
+						attackBonus: actor.getStatModifier("strength") + actor.getProficiencyBonus(),
+						damage: [
+							{
+								id: "unarmed",
+								source: "unarmed.strike",
+								origin: "unarmed",
+								damageType: "bludgeoning",
+								dice: [],
+								flatBonus: 1 + actor.getStatModifier("strength"),
+								doublesOnCrit: false,
+							},
+						],
+					},
+					...(options.distance !== undefined ? { distance: options.distance } : {}),
+				};
+				if (
+					this.isAttackLegal({
+						...selection,
+						actorId,
+						actionSource: "attack-action",
+						...(action ? { action, actionId: action.id } : {}),
+					})
+				)
+					candidates.push(selection);
+			}
+			return candidates;
+		}
 		for (const origin of ["primary", "nick", "light"] as const) {
 			if (origin === "primary" && !primary) continue;
 			if (origin !== "primary" && !additional) continue;
@@ -958,16 +1299,21 @@ export class CombatEngine {
 		}
 		return candidates;
 	}
-	resolveAttackAction(
+	legalAttackCandidates(
 		actorId: string,
 		targetId: string,
-		options: { mode?: AttackRequest["mode"]; weapon?: Weapon; distance?: number } = {},
-	): AttackActionResult {
+		options: AttackActionOptions = {},
+	): readonly AttackSelection[] {
+		return freezeSnapshot(structuredClone(this.actionCandidates(undefined, actorId, targetId, options)));
+	}
+	resolveAttackAction(actorId: string, targetId: string, options: AttackActionOptions = {}): AttackActionResult {
 		if (this.encounter.turn.ownerId !== actorId) throw new Error("Attack action requires the actor's own turn");
 		if (!this.canAct(actorId)) return { totalDamage: 0, attacks: [] };
 		const actor = this.encounter.definition(actorId);
 		if (!(actor instanceof BaseCharacter)) throw new Error("Monster attack actions require an explicit profile");
 		if (!this.encounter.canUseAction(actorId)) throw new Error("Action unavailable");
+		if (this.actionCandidates(undefined, actorId, targetId, options).length === 0)
+			return { totalDamage: 0, attacks: [] };
 		const initial = this.normalized({
 			actorId,
 			targetId,
@@ -976,7 +1322,7 @@ export class CombatEngine {
 			...(options.weapon ? { weapon: options.weapon } : {}),
 			...(options.distance !== undefined ? { distance: options.distance } : {}),
 		});
-		this.validateAttack(initial);
+		if (!options.unarmed) this.validateAttack(initial);
 		let action: AttackActionHandle | undefined;
 		while (true) {
 			const candidates = this.actionCandidates(action, actorId, targetId, options);
@@ -1014,7 +1360,7 @@ export function resolveAttackTurn(
 	engine: CombatEngine,
 	actorId: string,
 	targetId: string,
-	options?: { mode?: AttackRequest["mode"]; weapon?: Weapon; distance?: number },
+	options?: AttackActionOptions,
 ): AttackActionResult {
 	return engine.resolveAttackAction(actorId, targetId, options);
 }

@@ -1,4 +1,5 @@
 import type { TStatsType } from "../character/BaseCharacter.ts";
+import type { ResourceDefinition } from "../combat/CombatResources.ts";
 import type { TAttackContext, TPostHitContext, TTurnContext } from "../combat/CombatTypes.ts";
 import type Weapon from "../Items/Weapon.ts";
 import type { TCombatModifier } from "../modifiers/Modifiers.ts";
@@ -16,6 +17,9 @@ class BaseClass {
 	}
 	getWeaponMasteryCount(_level: number): number {
 		return 0;
+	}
+	getResourceDefinitions(_level: number): readonly ResourceDefinition[] {
+		return [];
 	}
 	getAttackCount(_level: number): number {
 		return 1;
