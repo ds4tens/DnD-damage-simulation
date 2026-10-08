@@ -1,8 +1,14 @@
 import type { TAttackContext } from "../../combat/CombatTypes.ts";
 import type { TCombatModifier } from "../../modifiers/Modifiers.ts";
 export enum EWeaponMastery {
+	CLEAVE = "cleave",
 	GRAZE = "graze",
+	NICK = "nick",
+	PUSH = "push",
+	SAP = "sap",
+	SLOW = "slow",
 	TOPPLE = "topple",
+	VEX = "vex",
 }
 export type TWeaponMastery = `${EWeaponMastery}`;
 type TWeaponMasteryRule = {
@@ -11,7 +17,13 @@ type TWeaponMasteryRule = {
 	getModifiers?: (mastery: TWeaponMastery, ctx: TAttackContext) => TCombatModifier[];
 };
 export const weaponMasteryRegistry: Record<TWeaponMastery, TWeaponMasteryRule> = {
-	[EWeaponMastery.TOPPLE]: { name: EWeaponMastery.TOPPLE, supported: false },
+	[EWeaponMastery.CLEAVE]: { name: EWeaponMastery.CLEAVE, supported: true },
+	[EWeaponMastery.NICK]: { name: EWeaponMastery.NICK, supported: true },
+	[EWeaponMastery.PUSH]: { name: EWeaponMastery.PUSH, supported: false },
+	[EWeaponMastery.SAP]: { name: EWeaponMastery.SAP, supported: true },
+	[EWeaponMastery.SLOW]: { name: EWeaponMastery.SLOW, supported: true },
+	[EWeaponMastery.TOPPLE]: { name: EWeaponMastery.TOPPLE, supported: true },
+	[EWeaponMastery.VEX]: { name: EWeaponMastery.VEX, supported: true },
 	[EWeaponMastery.GRAZE]: {
 		name: EWeaponMastery.GRAZE,
 		supported: true,
@@ -27,7 +39,7 @@ export const weaponMasteryRegistry: Record<TWeaponMastery, TWeaponMasteryRule> =
 								origin: "other",
 								damageType: ctx.weapon?.damageType ?? "bludgeoning",
 								dice: [],
-								flatBonus: Math.max(0, ctx.character?.getDamageBonus() ?? 0),
+								flatBonus: Math.max(0, ctx.character?.getStatModifier(ctx.attackAbility) ?? 0),
 								doublesOnCrit: false,
 							},
 						],

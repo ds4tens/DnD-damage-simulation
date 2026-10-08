@@ -1,3 +1,4 @@
+import type { TStatsType } from "../character/BaseCharacter.ts";
 import type { TAttackContext, TTurnContext } from "../combat/CombatTypes.ts";
 import type { TCombatModifier } from "./Modifiers.ts";
 
@@ -193,18 +194,24 @@ export const conditionRegistry: Record<TConditionName, TConditionRule> = {
 	 */
 	[EConditionName.INVISIBLE]: {
 		name: EConditionName.INVISIBLE,
-		getOutgoingAttackModifiers: () => [
-			{
-				source: "condition.invisible.outgoing",
-				attackRoll: { advantage: 1 },
-			},
-		],
-		getIncomingAttackModifiers: () => [
-			{
-				source: "condition.invisible.incoming",
-				attackRoll: { disadvantage: 1 },
-			},
-		],
+		getOutgoingAttackModifiers: (_condition, ctx) =>
+			ctx.canSee?.(ctx.request.targetId, ctx.request.actorId)
+				? []
+				: [
+						{
+							source: "condition.invisible.outgoing",
+							attackRoll: { advantage: 1 },
+						},
+					],
+		getIncomingAttackModifiers: (_condition, ctx) =>
+			ctx.canSee?.(ctx.request.actorId, ctx.request.targetId)
+				? []
+				: [
+						{
+							source: "condition.invisible.incoming",
+							attackRoll: { disadvantage: 1 },
+						},
+					],
 	},
 	/**
 	 * While you have the Incapacitated condition, you experience the following effects.
@@ -248,11 +255,31 @@ export const conditionRegistry: Record<TConditionName, TConditionRule> = {
 	 */
 	[EConditionName.GRAPPLED]: {
 		name: EConditionName.GRAPPLED,
-		getOutgoingAttackModifiers: () => [
+		getOutgoingAttackModifiers: (condition, ctx) => [
 			{
 				source: "condition.grappled.outgoing",
-				attackRoll: { disadvantage: 1 },
+				attackRoll: { disadvantage: condition.sourceId === ctx.request.targetId ? 0 : 1 },
 			},
 		],
 	},
 };
+
+/** 2024 Exhaustion affects every D20 Test, including death saves and Medicine. */
+export function exhaustionPenalty(conditions: readonly TConditionState[]): number {
+	return (
+		-2 *
+		conditions.reduce(
+			(level, condition) => (condition.name === "exhaustion" ? Math.max(level, condition.level ?? 1) : level),
+			0,
+		)
+	);
+}
+export function savingThrowConditionModifiers(conditions: readonly TConditionState[], ability: TStatsType) {
+	const names = new Set(conditions.map((condition) => condition.name));
+	return {
+		automaticFailure:
+			(ability === "strength" || ability === "dexterity") &&
+			(names.has("unconscious") || names.has("paralyzed") || names.has("stunned")),
+		disadvantage: ability === "dexterity" && names.has("restrained"),
+	};
+}

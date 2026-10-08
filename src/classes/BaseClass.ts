@@ -1,9 +1,11 @@
+import type { TStatsType } from "../character/BaseCharacter.ts";
 import type { TAttackContext, TPostHitContext, TTurnContext } from "../combat/CombatTypes.ts";
 import type Weapon from "../Items/Weapon.ts";
 import type { TCombatModifier } from "../modifiers/Modifiers.ts";
 
 /** Passive class definition: mutable combat resources belong to EncounterState. */
 class BaseClass {
+	readonly savingThrowProficiencies: readonly TStatsType[] = [];
 	readonly unsupportedFeatures: readonly string[] = [];
 	readonly weaponProficiencies: readonly Weapon[];
 	constructor(weaponProficiencies: readonly Weapon[]) {
@@ -11,6 +13,9 @@ class BaseClass {
 	}
 	isProficientWithWeapon(weapon: Weapon): boolean {
 		return this.weaponProficiencies.some((item) => item.name === weapon.name);
+	}
+	getWeaponMasteryCount(_level: number): number {
+		return 0;
 	}
 	getAttackCount(_level: number): number {
 		return 1;

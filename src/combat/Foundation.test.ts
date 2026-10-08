@@ -18,8 +18,14 @@ import { allDamageDice, appendAdditionalDie, rerollDamageDie, rollDamageComponen
 import type { DamageComponent } from "./DamageTypes.ts";
 import { EncounterState } from "./EncounterState.ts";
 
+/** Synthetic Extra Attack supplies legal slots for isolated feature phase tests. */
+class TestAttackClass extends BaseClass {
+	override getAttackCount(_level: number): number {
+		return 8;
+	}
+}
 const weapon = new Weapon("Test spear", "", "simple", "common", 1, 1, "medium", [new Dice(8)], "piercing");
-function character(characterClass = new BaseClass([weapon]), level = 4): BaseCharacter {
+function character(characterClass = new TestAttackClass([weapon]), level = 4): BaseCharacter {
 	return new BaseCharacter(
 		level,
 		characterClass,
@@ -44,6 +50,8 @@ function fixture(
 		class?: BaseClass;
 		level?: number;
 		hp?: number;
+		initialHp?: number;
+		zeroHpBehavior?: "die" | "death-saves";
 		ac?: number;
 		classState?: Record<string, number | boolean | string>;
 		strategy?: ConstructorParameters<typeof CombatEngine>[1]["strategy"];
@@ -52,17 +60,29 @@ function fixture(
 	const hero = character(options.class, options.level);
 	const encounter = new EncounterState([
 		{ id: "hero", definition: hero, initialClassState: options.classState ?? {} },
-		{ id: "enemy", definition: new BaseMonster("Target", options.ac ?? 12, options.hp ?? 50) },
+		{
+			id: "enemy",
+			definition: new BaseMonster("Target", options.ac ?? 12, options.hp ?? 50),
+			...(options.initialHp !== undefined ? { initialHitPoints: options.initialHp } : {}),
+			...(options.zeroHpBehavior ? { zeroHpBehavior: options.zeroHpBehavior } : {}),
+		},
 		{ id: "other", definition: new BaseMonster("Other", 12, 50) },
 	]);
 	const roller = new FixedDiceRoller(rolls);
 	const engine = new CombatEngine(encounter, {
 		roller,
+		allowScenarioReactions: true,
 		hooks: options.hooks ?? [],
 		...(options.strategy ? { strategy: options.strategy } : {}),
 	});
-	encounter.beginTurn("hero");
-	const request: AttackRequest = { actorId: "hero", targetId: "enemy", mode: "melee", actionSource: "attack-action" };
+	engine.beginTurn("hero");
+	const request: AttackRequest = {
+		actorId: "hero",
+		targetId: "enemy",
+		mode: "melee",
+		actionSource: "attack-action",
+		action: engine.beginAttackAction("hero"),
+	};
 	return { hero, encounter, roller, engine, request };
 }
 const extra: DamageComponent = {
@@ -216,8 +236,8 @@ test("phases run weapon choice before class dice, then critical benefit, reroll,
 	assert.deepEqual(order, ["weapon", "components", "critical", "reroll", "onHit", "afterAttack"]);
 });
 test("HP floors at zero, overkill stays damage and an already-zero target produces no new transition", () => {
-	const f = fixture([10, 8, 10, 1], { hp: 5 });
-	const first = f.engine.resolveSingleAttack(f.request);
+	const f = fixture([10, 8, 10, 10, 1, 1], { hp: 50, initialHp: 5, zeroHpBehavior: "death-saves" });
+	const first = f.engine.resolveSingleAttack({ ...f.request, distance: 5 });
 	assert.deepEqual(first.damage?.hp, {
 		targetId: "enemy",
 		previousHp: 5,
@@ -225,10 +245,19 @@ test("HP floors at zero, overkill stays damage and an already-zero target produc
 		damageTaken: 11,
 		hpLost: 5,
 		reducedToZero: true,
+		previousTemporaryHp: 0,
+		currentTemporaryHp: 0,
+		temporaryHpLost: 0,
+		overflow: 6,
+		previousLifeState: "alive",
+		currentLifeState: "dying",
+		previousDeathSaves: { successes: 0, failures: 0 },
+		currentDeathSaves: { successes: 0, failures: 0 },
 	});
-	const second = f.engine.resolveSingleAttack(f.request);
+	const second = f.engine.resolveSingleAttack({ ...f.request, distance: 5 });
 	assert.equal(second.damage?.hp.reducedToZero, false);
 	assert.equal(second.damage?.hp.hpLost, 0);
+	assert.equal(second.damage?.hp.currentDeathSaves.failures, 2);
 	assert.equal(f.hero.hitPoints, 50);
 });
 test("once-per-turn state spans separate calls and reactions; only explicit beginTurn resets it", () => {
@@ -246,12 +275,23 @@ test("once-per-turn state spans separate calls and reactions; only explicit begi
 	});
 	f.engine.resolveSingleAttack(f.request);
 	assert.throws(() => f.encounter.beginTurn("hero"), /End/);
-	f.engine.resolveSingleAttack({ ...f.request, actionSource: "reaction" });
+	f.engine.resolveSingleAttack({
+		...f.request,
+		actionSource: "reaction",
+		grant: f.engine.grantScenarioReaction({ ...f.request, actionSource: "reaction" }),
+	});
 	f.encounter.endTurn();
-	f.encounter.beginTurn("enemy");
-	f.engine.resolveSingleAttack({ ...f.request, actionSource: "reaction" });
+	f.engine.beginTurn("hero"); // Restore Reaction only on the actor's next own turn.
+	f.engine.endTurn();
+	f.engine.beginTurn("enemy");
+	f.engine.resolveSingleAttack({
+		...f.request,
+		actionSource: "reaction",
+		grant: f.engine.grantScenarioReaction({ ...f.request, actionSource: "reaction" }),
+	});
 	f.encounter.endTurn();
-	f.encounter.beginTurn("hero");
+	f.engine.beginTurn("hero");
+	f.request.action = f.engine.beginAttackAction("hero");
 	f.engine.resolveSingleAttack(f.request);
 	assert.deepEqual(seen, [false, true, false, false]);
 });
@@ -315,15 +355,27 @@ test("timed outgoing disadvantage affects explicit monster attacks and cancels a
 	};
 	assert.deepEqual(f.engine.resolveSingleAttack(request).hit.d20Rolls, [19, 2]);
 	f.encounter.state("enemy").conditions.push({ name: "invisible" });
-	assert.deepEqual(f.engine.resolveSingleAttack(request).hit.d20Rolls, [11]);
+	const reaction = { ...request, actionSource: "reaction" as const };
+	assert.deepEqual(
+		f.engine.resolveSingleAttack({ ...reaction, grant: f.engine.grantScenarioReaction(reaction) }).hit.d20Rolls,
+		[11],
+	);
 });
 test("bonus action belongs to the turn owner and is consumed exactly once", () => {
-	const f = fixture([10, 1]);
+	const f = fixture([10, 1, 10, 1], {
+		hooks: [
+			{
+				id: "test.bonus",
+				afterAttack: (ctx) =>
+					ctx.encounter.canUseBonusAction("hero") ? [{ targetId: "enemy", source: "test.bonus" }] : [],
+			},
+		],
+	});
 	assert.equal(f.encounter.canUseBonusAction("enemy"), false);
 	assert.throws(() => f.encounter.spendBonusAction("enemy"), /unavailable/);
-	f.engine.resolveSingleAttack({ ...f.request, actionSource: "bonus-action" });
+	f.engine.resolveSingleAttack(f.request);
 	assert.equal(f.encounter.canUseBonusAction("hero"), false);
-	assert.throws(() => f.engine.resolveSingleAttack({ ...f.request, actionSource: "bonus-action" }), /unavailable/);
+	assert.throws(() => f.engine.resolveSingleAttack({ ...f.request, actionSource: "bonus-action" }), /grant/);
 	f.encounter.endTurn();
 	f.encounter.beginTurn("hero");
 	assert.equal(f.encounter.canUseBonusAction("hero"), true);
@@ -454,16 +506,16 @@ test("Zealot Divine Fury keeps chosen type, flat level bonus and injected critic
 	assert.deepEqual(result.damage?.byType, { piercing: 8, necrotic: 8 });
 	assert.equal(f.roller.remaining, 0);
 });
-test("explicit unsupported feats/mastery fail; partial classes report structured limitations", () => {
+test("invalid feats fail; unsupported Push and partial classes report structured limitations", () => {
 	assert.throws(
 		() =>
-			new BaseCharacter(4, new BaseClass([weapon]), weapon, "strength", character().stats, 16, 50, [
+			new BaseCharacter(4, new TestAttackClass([weapon]), weapon, "strength", character().stats, 16, 50, [
 				{ name: EFeatName.PIERCER },
 			]),
 		/Invalid ability score/,
 	);
-	const topple = new Weapon(
-		"Topple test",
+	const push = new Weapon(
+		"Push test",
 		"",
 		"martial",
 		"common",
@@ -472,10 +524,17 @@ test("explicit unsupported feats/mastery fail; partial classes report structured
 		"medium",
 		[new Dice(8)],
 		"bludgeoning",
-		EWeaponMastery.TOPPLE,
+		EWeaponMastery.PUSH,
 	);
-	const f = fixture([], { class: new Barbarian([topple]), level: 1 });
-	assert.throws(() => f.engine.resolveSingleAttack({ ...f.request, weapon: topple }), /Unsupported Weapon Mastery/);
+	const f = fixture([10, 1]);
+	f.encounter.provideWeaponInstance("hero", { id: "push", weapon: push });
+	const result = f.engine.resolveSingleAttack({
+		...f.request,
+		weaponInstanceId: "push",
+		weapon: push,
+		equip: { kind: "draw", hand: "right", when: "before", weaponInstanceId: "push" },
+	});
+	assert.ok(result.limitations.some((limitation) => limitation.includes("Push")));
 	const ram = fixture([10, 1], { class: new WildHeart([weapon]), level: 1 });
 	assert.ok(ram.engine.resolveSingleAttack(ram.request).limitations.includes("Wild Heart Ram"));
 });
@@ -497,8 +556,15 @@ test("selected weapon category/reach are independent of distance and ranged mode
 		properties: ["reach", "heavy"],
 		reach: 10,
 	});
-	assert.equal(f.engine.isAttackLegal({ ...f.request, weapon: reach, distance: 10 }), true);
-	assert.equal(f.engine.isAttackLegal({ ...f.request, weapon: reach, mode: "ranged" }), false);
+	f.encounter.provideWeaponInstance("hero", { id: "reach", weapon: reach });
+	const selected = {
+		...f.request,
+		weapon: reach,
+		weaponInstanceId: "reach",
+		equip: { kind: "draw" as const, hand: "right" as const, when: "before" as const, weaponInstanceId: "reach" },
+	};
+	assert.equal(f.engine.isAttackLegal({ ...selected, distance: 10 }), true);
+	assert.equal(f.engine.isAttackLegal({ ...selected, mode: "ranged" }), false);
 });
 
 test("Hew retargeting uses scenario geometry, stable live targets, and validated target choices", () => {
@@ -665,6 +731,7 @@ test("encounters detach the whole weapon/class graph from the build and each oth
 	assert.equal(b.characterClass.isProficientWithWeapon(b.weapon), true);
 	second.beginTurn("hero");
 	const roller = new FixedDiceRoller([
+		{ sides: 20, value: 10 },
 		{ sides: 20, value: 10 },
 		{ sides: 6, value: 3 },
 	]);

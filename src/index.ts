@@ -1,3 +1,4 @@
+import { runCombatSimulationDemo } from "./scenarios/CombatSimulation.ts";
 import { createFiveFeatScenario } from "./scenarios/FiveFeats.ts";
 
 const scenario = createFiveFeatScenario();
@@ -20,4 +21,5 @@ console.log(
 		2,
 	),
 );
-scenario.encounter.endTurn();
+scenario.engine.endTurn();
+console.log(JSON.stringify(runCombatSimulationDemo(), null, 2));

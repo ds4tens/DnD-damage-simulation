@@ -1,3 +1,4 @@
+import type { TStatsType } from "../character/BaseCharacter.ts";
 import type { TAttackContext, TPostHitContext } from "../combat/CombatTypes.ts";
 import type { DamageComponent } from "../combat/DamageTypes.ts";
 import type Weapon from "../Items/Weapon.ts";
@@ -6,6 +7,10 @@ import BaseClass from "./BaseClass.ts";
 
 /** Partial class support. Rage is scenario state, not a complete Rage action/duration model. */
 class Barbarian extends BaseClass {
+	override readonly savingThrowProficiencies: readonly TStatsType[] = ["strength", "constitution"];
+	override getWeaponMasteryCount(level: number): number {
+		return level >= 10 ? 4 : level >= 4 ? 3 : 2;
+	}
 	override readonly unsupportedFeatures: readonly string[] = [
 		"Full Rage activation/resources/duration",
 		"Configurable Reckless Attack and Brutal Strike decisions",
@@ -17,7 +22,7 @@ class Barbarian extends BaseClass {
 		throw new Error(`Unsupported barbarian level: ${level}`);
 	}
 	canUseStrengthMeleeAttack(ctx: TAttackContext): boolean {
-		return ctx.character?.weaponPrimaryStat === "strength" && ctx.request.mode === "melee";
+		return ctx.attackAbility === "strength" && ctx.request.mode === "melee";
 	}
 	shouldUseBrutalStrike(ctx: TAttackContext): boolean {
 		return (ctx.character?.level ?? 0) >= 9 && ctx.attackIndexInTurn === 0 && this.canUseStrengthMeleeAttack(ctx);
@@ -33,7 +38,11 @@ class Barbarian extends BaseClass {
 		return [{ source: "barbarian.reckless-attack", attackRoll: { advantage: 1 } }];
 	}
 	override canUseWeaponMastery(weapon: Weapon): boolean {
-		return this.weaponProficiencies.some((item) => item.name === weapon.name && item.weaponMastery !== undefined);
+		return (
+			weapon.category === "melee" &&
+			(weapon.type === "simple" || weapon.type === "martial") &&
+			weapon.weaponMastery !== undefined
+		);
 	}
 	override getDamageRollModifiers(ctx: TPostHitContext): TCombatModifier[] {
 		const character = ctx.character;

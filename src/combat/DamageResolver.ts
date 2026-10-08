@@ -9,6 +9,7 @@ import type {
 	RolledDamageDie,
 } from "./DamageTypes.ts";
 import type { EncounterState } from "./EncounterState.ts";
+import { resolveDefenses } from "./HitPointsResolver.ts";
 
 export function rollDamageComponents(
 	components: readonly DamageComponent[],
@@ -100,11 +101,23 @@ export function sumDamageByType(pool: DamagePool): DamageByType {
 	for (const type of Object.keys(totals) as (keyof DamageByType)[]) totals[type] = Math.max(0, totals[type] ?? 0);
 	return totals;
 }
-export function resolveDamage(encounter: EncounterState, targetId: string, pool: DamagePool): DamageResult {
+export function resolveDamage(
+	encounter: EncounterState,
+	targetId: string,
+	pool: DamagePool,
+	options: { critical?: boolean } = {},
+): DamageResult {
 	validateDamagePool(pool);
 	const byType = sumDamageByType(pool);
 	const rolledDamage = Object.values(byType).reduce((sum, value) => sum + (value ?? 0), 0);
-	// Resistances, immunity and temporary HP are deliberately not modeled in this scope.
-	const appliedDamage = rolledDamage;
-	return { components: pool, byType, rolledDamage, appliedDamage, hp: encounter.applyDamage(targetId, appliedDamage) };
+	const appliedByType = resolveDefenses(encounter, targetId, byType);
+	const appliedDamage = Object.values(appliedByType).reduce((sum, value) => sum + (value ?? 0), 0);
+	return {
+		components: pool,
+		byType,
+		appliedByType,
+		rolledDamage,
+		appliedDamage,
+		hp: encounter.applyDamage(targetId, appliedDamage, options),
+	};
 }
