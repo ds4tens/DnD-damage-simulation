@@ -4,7 +4,7 @@ import BaseCharacter, { defaultStatBlock } from "../character/BaseCharacter.ts";
 import Barbarian from "../classes/Barbarian.ts";
 import BaseClass from "../classes/BaseClass.ts";
 import { FixedDiceRoller } from "../dice/RandomSource.ts";
-import { Dagger, Glaive, Rapier } from "../Items/Weapon/WeaponList.ts";
+import { Battleaxe, Dagger, Glaive, Rapier } from "../Items/Weapon/WeaponList.ts";
 import BaseMonster from "../monster/BaseMonster.ts";
 import { CombatEngine } from "./AttackResolver.ts";
 import type { AttackSelection, CombatantInput, CombatHook } from "./CombatTypes.ts";
@@ -124,6 +124,26 @@ test("Dual Wielder Quick Draw exposes and resolves two physical draws with one a
 	assert.equal(attack.weaponInstanceId, "dagger");
 	assert.deepEqual(f.encounter.state("hero").hands, { left: "dagger", right: "rapier" });
 	assert.equal(f.engine.finishAttackAction(action).attacks.length, 1);
+	assert.equal(f.roller.remaining, 0);
+});
+test("Attack action facade permits legal draw candidates from empty hands and rejects invalid options before costs", () => {
+	const f = drawFixture(true);
+	assert.throws(
+		() => f.engine.resolveAttackAction("hero", "target", { distance: Number.NaN }),
+		/Invalid attack action distance/,
+	);
+	assert.throws(
+		() => f.engine.resolveAttackAction("hero", "target", { mode: "magic" as "melee" }),
+		/Invalid attack action mode/,
+	);
+	assert.throws(() => f.engine.resolveAttackAction("hero", "unknown"), /Unknown/);
+	assert.throws(() => f.engine.resolveAttackAction("hero", "hero"), /Invalid attack action target/);
+	assert.throws(() => f.engine.resolveAttackAction("hero", "target", { weapon: Battleaxe }), /Unknown selected weapon/);
+	assert.equal(f.encounter.canUseAction("hero"), true);
+	assert.equal(f.roller.remaining, 2);
+	const result = f.engine.resolveAttackAction("hero", "target");
+	assert.equal(result.attacks.length, 1);
+	assert.deepEqual(f.encounter.state("hero").hands, { left: "dagger", right: "rapier" });
 	assert.equal(f.roller.remaining, 0);
 });
 test("Quick Draw rejects missing entitlement, Two-Handed and mixed timing before budgets or RNG", () => {

@@ -1706,19 +1706,29 @@ export class CombatEngine {
 		if (!(actor instanceof BaseCharacter)) throw new Error("Monster attack actions require an explicit profile");
 		if (!this.encounter.canUseAction(actorId)) throw new Error("Action unavailable");
 		if (
+			!options ||
+			typeof options !== "object" ||
+			Array.isArray(options) ||
+			(options.unarmed !== undefined && typeof options.unarmed !== "boolean") ||
+			(options.unarmedEffects !== undefined && typeof options.unarmedEffects !== "boolean")
+		)
+			throw new Error("Invalid attack action options");
+		this.encounter.definition(targetId);
+		if (targetId === actorId) throw new Error("Invalid attack action target");
+		if (options.mode !== undefined && !["melee", "ranged", "thrown"].includes(options.mode))
+			throw new Error("Invalid attack action mode");
+		if (options.distance !== undefined && (!Number.isFinite(options.distance) || options.distance < 0))
+			throw new Error("Invalid attack action distance");
+		if (options.weapon) {
+			this.validateWeapon(options.weapon);
+			if (!this.encounter.weapons(actorId).some((instance) => instance.weapon.id === options.weapon?.id))
+				throw new Error("Unknown selected weapon in actor inventory");
+		}
+		if (
 			this.actionCandidates(undefined, actorId, targetId, options).length === 0 &&
 			!(options.unarmedEffects && this.legalUnarmedEffectCandidates(actorId, targetId).length)
 		)
 			return { totalDamage: 0, attacks: [] };
-		const initial = this.normalized({
-			actorId,
-			targetId,
-			actionSource: "attack-action",
-			mode: options.mode ?? (options.weapon ?? actor.weapon).category,
-			...(options.weapon ? { weapon: options.weapon } : {}),
-			...(options.distance !== undefined ? { distance: options.distance } : {}),
-		});
-		if (!options.unarmed && !options.unarmedEffects) this.validateAttack(initial);
 		let action: AttackActionHandle | undefined;
 		while (true) {
 			const candidates = this.actionCandidates(action, actorId, targetId, options);
@@ -1727,7 +1737,7 @@ export class CombatEngine {
 				actor: this.encounter.snapshot(actorId),
 				targets: this.encounter.ids.filter((id) => id !== actorId).map((id) => this.encounter.snapshot(id)),
 				turnId: this.encounter.turn.id,
-				actionId: action?.id ?? initial.actionId ?? "pending",
+				actionId: action?.id ?? "pending",
 				remainingPrimaryAttacks: remaining,
 				bonusActionAvailable: this.encounter.canUseBonusAction(actorId),
 				reactionAvailable: this.encounter.canUseReaction(actorId),
