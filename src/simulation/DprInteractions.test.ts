@@ -118,6 +118,83 @@ test("DPR day carries exhausted ammunition through Short and Long Rest without r
 	assert.equal(result.dpr, 8 / 3);
 });
 
+test("additional thrown stock supplies three physical daggers once per independent trial and never refills on rest", () => {
+	const base = selection();
+	const build: CharacterBuildSelection = {
+		...base,
+		equipment: {
+			...base.equipment,
+			weapons: [{ id: "dagger-1", weaponId: "dagger" }],
+			hands: { left: "dagger-1", right: null },
+		},
+		stock: { thrownWeapons: { dagger: 2 } },
+	};
+	const thrown = (id: string, rounds: number): DprEpisode => ({
+		...passive(id, rounds),
+		targets: passive(id).targets.map((target) => ({ ...target, distanceToActor: 10 })),
+		attack: { kind: "weapon", mode: "thrown" },
+	});
+	const experiment = input(
+		build,
+		{
+			id: "three-daggers-rest-day",
+			episodes: [thrown("first", 4), thrown("second", 2), thrown("third", 1)],
+			transitions: [
+				{ afterEpisodeId: "first", elapsedMinutes: 60, rest: "short-rest" },
+				{ afterEpisodeId: "second", elapsedMinutes: 480, rest: "long-rest" },
+			],
+		},
+		{
+			// Decline the optional Light/Nick follow-up as well as class/feat
+			// features, so this supply oracle spends one physical dagger per turn.
+			chooseNextAttack: (_snapshot, candidates) => {
+				const index = candidates.findIndex((candidate) => candidate.attackOrigin === "primary");
+				return index < 0 ? null : index;
+			},
+		},
+	);
+	const rolls = fixed({ first: [10, 3, 10, 3, 10, 3] });
+	const result = runDprTrial(experiment, rolls);
+	assert.deepEqual(result.episodes[0]?.damageByRound, [6, 6, 6, 0]);
+	assert.deepEqual(
+		result.episodes.map((episode) => episode.appliedDamage),
+		[18, 0, 0],
+	);
+	assert.deepEqual(
+		result.episodes.map((episode) => episode.weaponInstancesSpent),
+		[3, 0, 0],
+	);
+	const first = result.episodes[0];
+	assert.ok(first);
+	assert.equal(first.attacks?.length, 3);
+	assert.equal(first.finalSpentWeaponInstanceIds.length, 3);
+	assert.equal(new Set(first.finalSpentWeaponInstanceIds).size, 3);
+	assert.ok(first.finalSpentWeaponInstanceIds.includes("dagger-1"));
+	assert.deepEqual(
+		new Set(first.attacks?.map((attack) => attack.weaponInstanceId)),
+		new Set(first.finalSpentWeaponInstanceIds),
+	);
+	assert.deepEqual(
+		result.episodes.map((episode) => episode.initialSpentWeaponInstanceIds.length),
+		[0, 3, 3],
+	);
+	assert.equal(result.weaponInstancesSpent, 3);
+	assert.equal(result.appliedDamage, 18);
+	assert.equal(result.plannedRounds, 7);
+	assert.equal(result.dpr, 18 / 7);
+	assert.deepEqual(build.stock?.thrownWeapons, { dagger: 2 });
+	assert.equal(build.equipment.weapons.length, 1);
+	// Replay is exact; another independent trial starts with the full initial
+	// physical supply despite the preceding day's Short/Long Rest depletion.
+	assert.deepEqual(runDprTrial(experiment, rolls), result);
+	const fresh = runDprTrial(experiment, { ...rolls, trialIndex: 27 });
+	assert.deepEqual(fresh.episodes[0]?.damageByRound, [6, 6, 6, 0]);
+	assert.equal(fresh.episodes[0]?.initialSpentWeaponInstanceIds.length, 0);
+	assert.deepEqual(fresh.episodes[0]?.finalSpentWeaponInstanceIds, first.finalSpentWeaponInstanceIds);
+	assert.equal(fresh.appliedDamage, 18);
+	assert.equal(fresh.weaponInstancesSpent, 3);
+});
+
 test("passive targets stand only with positive effective speed, preserving the attack advantage consequence", () => {
 	const prone = (speed: number): DprEpisode => ({
 		...passive("prone", 2),
