@@ -106,5 +106,12 @@ export function resolveDamage(encounter: EncounterState, targetId: string, pool:
 	const rolledDamage = Object.values(byType).reduce((sum, value) => sum + (value ?? 0), 0);
 	// Resistances, immunity and temporary HP are deliberately not modeled in this scope.
 	const appliedDamage = rolledDamage;
-	return { components: pool, byType, rolledDamage, appliedDamage, hp: encounter.applyDamage(targetId, appliedDamage) };
+	return {
+		components: pool,
+		byType,
+		appliedByType: { ...byType },
+		rolledDamage,
+		appliedDamage,
+		hp: encounter.applyDamage(targetId, appliedDamage),
+	};
 }

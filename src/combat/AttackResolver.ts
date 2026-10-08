@@ -6,10 +6,13 @@ import type Weapon from "../Items/Weapon.ts";
 import { conditionRegistry } from "../modifiers/Conditions.ts";
 import { mergeCombatModifiers, type TCombatModifier } from "../modifiers/Modifiers.ts";
 import type {
+	AttackActionHandle,
 	AttackActionResult,
 	AttackContext,
+	AttackGrant,
 	AttackRequest,
 	AttackResult,
+	AttackSelection,
 	AttackSnapshot,
 	CombatEngineOptions,
 	CombatHook,
@@ -37,6 +40,11 @@ export function collectAttackConditionModifiers(ctx: AttackContext): TCombatModi
 		),
 		...(ctx.encounter.hasAttackDisadvantage(ctx.request.actorId)
 			? [{ source: "effect.outgoing-disadvantage", attackRoll: { disadvantage: 1 } }]
+			: []),
+		...(ctx.encounter
+			.effectsOn(ctx.request.actorId)
+			.some((effect) => effect.attackAdvantageAgainst === ctx.request.targetId)
+			? [{ source: "effect.target-advantage", attackRoll: { advantage: 1 } }]
 			: []),
 	];
 }
@@ -79,6 +87,13 @@ export class CombatEngine {
 	readonly encounter: EncounterState;
 	private readonly strategy: CombatStrategy;
 	private readonly hooks: readonly CombatHook[];
+	private readonly actions = new Map<
+		AttackActionHandle,
+		{ remaining: number; attacks: AttackResult[]; closed: boolean }
+	>();
+	private readonly grants = new Map<AttackGrant, { request: AttackRequest; spent: boolean }>();
+	private nextActionId = 1;
+	private nextGrantId = 1;
 	constructor(
 		encounter: EncounterState,
 		private readonly options: CombatEngineOptions,
@@ -99,6 +114,125 @@ export class CombatEngine {
 						throw new Error(`Unsupported combat feat: ${feat.name}`);
 				}
 		}
+	}
+	beginTurn(ownerId: string): void {
+		this.encounter.setLifecycleMode("manual");
+		this.encounter.beginTurn(ownerId);
+	}
+	endTurn(): void {
+		this.encounter.endTurn();
+	}
+	beginAttackAction(actorId: string): AttackActionHandle {
+		this.encounter.definition(actorId);
+		if (!this.canAct(actorId)) throw new Error("Actor cannot take actions");
+		if (!this.encounter.canUseAction(actorId)) throw new Error("Action unavailable");
+		const actor = this.encounter.definition(actorId);
+		const remaining = actor instanceof BaseCharacter ? actor.characterClass.getAttackCount(actor.level) : 1;
+		if (!Number.isSafeInteger(remaining) || remaining < 1) throw new Error("Invalid attack count");
+		const handle = Object.freeze({ id: `action-${this.nextActionId++}`, actorId, turnId: this.encounter.turn.id });
+		this.encounter.spendAction(actorId);
+		this.actions.set(handle, { remaining, attacks: [], closed: false });
+		return handle;
+	}
+	attackInAction(action: AttackActionHandle, selection: AttackSelection): AttackResult {
+		return this.resolveSingleAttack({ ...selection, actorId: action.actorId, actionSource: "attack-action", action });
+	}
+	finishAttackAction(action: AttackActionHandle): AttackActionResult {
+		const entry = this.actionEntry(action);
+		entry.closed = true;
+		const total = (attack: AttackResult): number =>
+			(attack.damage?.appliedDamage ?? 0) + attack.triggeredAttacks.reduce((sum, child) => sum + total(child), 0);
+		return structuredClone({
+			totalDamage: entry.attacks.reduce((sum, attack) => sum + total(attack), 0),
+			attacks: entry.attacks,
+		});
+	}
+	private actionEntry(action: AttackActionHandle): { remaining: number; attacks: AttackResult[]; closed: boolean } {
+		const entry = this.actions.get(action);
+		if (
+			!entry ||
+			entry.closed ||
+			action.turnId !== this.encounter.turn.id ||
+			action.actorId !== this.encounter.turn.ownerId
+		)
+			throw new Error("Invalid or expired Attack action handle");
+		return entry;
+	}
+	grantScenarioReaction(input: Omit<AttackRequest, "grant">): AttackGrant {
+		if (!this.options.allowScenarioReactions) throw new Error("Scenario reactions require explicit opt-in");
+		if (input.actionSource !== "reaction") throw new Error("Scenario grants authorize only Reactions");
+		const request = this.normalized(input);
+		this.validateAttack(request);
+		return this.issueGrant({ ...request, attackOrigin: "scenario" });
+	}
+	private issueGrant(request: AttackRequest): AttackGrant {
+		const grant = Object.freeze({
+			id: `grant-${this.nextGrantId++}`,
+			actorId: request.actorId,
+			turnId: this.encounter.turn.id,
+		});
+		this.grants.set(grant, { request, spent: false });
+		return grant;
+	}
+	private validateAttack(request: AttackRequest): void {
+		this.encounter.turn;
+		if (!this.isAttackLegal(request)) throw new Error("Illegal attack request");
+		if (!this.canAct(request.actorId)) throw new Error("Actor cannot take actions");
+		if (request.profile) {
+			if (!Number.isFinite(request.profile.attackBonus)) throw new Error("Invalid attack bonus");
+			const ids = new Set<string>();
+			for (const component of request.profile.damage) {
+				if (!component.id || ids.has(component.id) || !Number.isFinite(component.flatBonus))
+					throw new Error("Invalid damage component");
+				ids.add(component.id);
+				for (const sides of component.dice)
+					if (!Number.isSafeInteger(sides) || sides < 1) throw new Error("Invalid damage die");
+			}
+		}
+		const actor = this.encounter.definition(request.actorId);
+		const mastery = request.weapon?.weaponMastery;
+		if (
+			mastery &&
+			request.weapon &&
+			actor instanceof BaseCharacter &&
+			actor.characterClass.canUseWeaponMastery(request.weapon) &&
+			!weaponMasteryRegistry[mastery].supported
+		)
+			throw new Error(`Unsupported Weapon Mastery: ${mastery}`);
+	}
+	private validateAuthority(request: AttackRequest): void {
+		if (request.grant) {
+			const entry = this.grants.get(request.grant);
+			if (
+				!entry ||
+				entry.spent ||
+				request.grant.turnId !== this.encounter.turn.id ||
+				entry.request.actorId !== request.actorId ||
+				entry.request.targetId !== request.targetId ||
+				entry.request.actionSource !== request.actionSource ||
+				entry.request.mode !== request.mode ||
+				entry.request.weapon !== request.weapon ||
+				entry.request.profile !== request.profile
+			)
+				throw new Error("Invalid or expired attack grant");
+			if (request.actionSource === "bonus-action" && !this.encounter.canUseBonusAction(request.actorId))
+				throw new Error("Bonus Action unavailable");
+			if (request.actionSource === "reaction" && !this.encounter.canUseReaction(request.actorId))
+				throw new Error("Reaction unavailable");
+			return;
+		}
+		if (
+			request.actionSource !== "attack-action" ||
+			(request.attackOrigin !== undefined && request.attackOrigin !== "primary")
+		)
+			throw new Error("An issued attack grant is required");
+		if (request.action) {
+			const entry = this.actionEntry(request.action);
+			if (request.actorId !== request.action.actorId || entry.remaining < 1)
+				throw new Error("Attack action slot unavailable");
+			if (request.attackOrigin !== undefined && request.attackOrigin !== "primary")
+				throw new Error("An issued attack grant is required");
+		} else if (!this.encounter.canUseAction(request.actorId)) throw new Error("Action unavailable");
 	}
 	private normalized(request: AttackRequest): AttackRequest {
 		const actor = this.encounter.definition(request.actorId);
@@ -151,6 +285,7 @@ export class CombatEngine {
 			roller: this.options.roller,
 			attacker,
 			character,
+			attackAbility: request.ability ?? character?.weaponPrimaryStat ?? "strength",
 			target: this.encounter.definition(request.targetId),
 			actorState: this.encounter.state(request.actorId),
 			targetState: this.encounter.state(request.targetId),
@@ -227,6 +362,7 @@ export class CombatEngine {
 		);
 	}
 	private canAct(actorId: string): boolean {
+		if (this.encounter.state(actorId).lifeState !== "alive") return false;
 		const actor = this.encounter.definition(actorId);
 		const ctx: TurnContext = { actor, actorState: this.encounter.state(actorId), encounter: this.encounter };
 		return [
@@ -250,11 +386,28 @@ export class CombatEngine {
 		];
 	}
 	resolveSingleAttack(input: AttackRequest, source: string = "attack"): AttackResult {
-		const request = this.normalized(input);
-		this.encounter.turn;
-		if (!this.isAttackLegal(request)) throw new Error("Illegal attack request");
-		if (!this.canAct(request.actorId)) throw new Error("Actor cannot take actions");
-		if (request.actionSource === "bonus-action") this.encounter.spendBonusAction(request.actorId);
+		let request = this.normalized(input);
+		this.validateAttack(request);
+		this.validateAuthority(request);
+		let implicitAction: AttackActionHandle | undefined;
+		if (request.grant) {
+			const grant = this.grants.get(request.grant);
+			if (!grant) throw new Error("Invalid attack grant");
+			if (request.actionSource === "bonus-action") this.encounter.spendBonusAction(request.actorId);
+			if (request.actionSource === "reaction") this.encounter.spendReaction(request.actorId);
+			grant.spent = true;
+			request = {
+				...request,
+				actionId: request.actionId ?? request.grant.id,
+				attackOrigin: grant.request.attackOrigin ?? "scenario",
+			};
+		} else {
+			if (!request.action) implicitAction = this.beginAttackAction(request.actorId);
+			const action = request.action ?? implicitAction;
+			if (!action) throw new Error("Attack action unavailable");
+			this.actionEntry(action).remaining--;
+			request = { ...request, action, actionId: action.id, attackOrigin: "primary" };
+		}
 		const attack = this.encounter.nextAttack(request.actorId);
 		const ctx = this.context(request, attack.index);
 		const hooks = this.activeHooks(ctx);
@@ -280,6 +433,7 @@ export class CombatEngine {
 			...collectAttackConditionModifiers(ctx),
 			...hooks.flatMap((hook) => hook.attackModifiers?.(ctx) ?? []),
 		]);
+		this.encounter.consumeAttackEffects(request.actorId, request.targetId);
 		const hit = resolveHit(ctx, modifier);
 		ctx.hit = hit;
 		const hitCtx: HitContext = { ...ctx, hit };
@@ -319,6 +473,10 @@ export class CombatEngine {
 			targetId: request.targetId,
 			turnId: this.encounter.turn.id,
 			actionSource: request.actionSource,
+			...(request.actionId ? { actionId: request.actionId } : {}),
+			attackOrigin: request.attackOrigin ?? "primary",
+			...(request.parentAttackId ? { parentAttackId: request.parentAttackId } : {}),
+			roundNumber: this.encounter.roundNumber,
 			source,
 			attackIndexInTurn: attack.index,
 			hit,
@@ -332,15 +490,20 @@ export class CombatEngine {
 			for (const trigger of triggers) {
 				if (!this.encounter.canUseBonusAction(request.actorId)) throw new Error("Triggered Bonus Action unavailable");
 				// No retained trigger queue: decision and action resolve before any following primary attack.
-				triggeredAttacks.push(
-					this.resolveSingleAttack(
-						{ ...request, targetId: trigger.targetId, actionSource: "bonus-action" },
-						trigger.source,
-					),
-				);
+				const triggeredRequest = this.normalized({
+					...request,
+					targetId: trigger.targetId,
+					actionSource: "bonus-action",
+					attackOrigin: "hew",
+					parentAttackId: result.attackId,
+				});
+				const grant = this.issueGrant(triggeredRequest);
+				triggeredAttacks.push(this.resolveSingleAttack({ ...triggeredRequest, grant }, trigger.source));
 			}
 		}
 		// Keep outcome data detached from later hooks/turns and strategy references.
+		if (request.action && !request.grant) this.actionEntry(request.action).attacks.push(result);
+		if (implicitAction) this.finishAttackAction(implicitAction);
 		return structuredClone(result);
 	}
 	resolveAttackAction(
@@ -354,6 +517,16 @@ export class CombatEngine {
 		if (!(actor instanceof BaseCharacter)) throw new Error("Monster attack actions require an explicit profile");
 		const weapon = options.weapon ?? actor.weapon;
 		const attacks: AttackResult[] = [];
+		const normalized = this.normalized({
+			actorId,
+			targetId,
+			actionSource: "attack-action",
+			mode: options.mode ?? weapon.category,
+			weapon,
+			...(options.distance === undefined ? {} : { distance: options.distance }),
+		});
+		this.validateAttack(normalized);
+		const action = this.beginAttackAction(actorId);
 		const count = actor.characterClass.getAttackCount(actor.level);
 		for (let index = 0; index < count; index++)
 			attacks.push(
@@ -361,15 +534,13 @@ export class CombatEngine {
 					actorId,
 					targetId,
 					actionSource: "attack-action",
-					actionId: `turn-${this.encounter.turn.id}:attack-action`,
+					action,
 					mode: options.mode ?? weapon.category,
 					weapon,
 					...(options.distance === undefined ? {} : { distance: options.distance }),
 				}),
 			);
-		const total = (attack: AttackResult): number =>
-			(attack.damage?.appliedDamage ?? 0) + attack.triggeredAttacks.reduce((sum, entry) => sum + total(entry), 0);
-		return { totalDamage: attacks.reduce((sum, attack) => sum + total(attack), 0), attacks };
+		return this.finishAttackAction(action);
 	}
 }
 

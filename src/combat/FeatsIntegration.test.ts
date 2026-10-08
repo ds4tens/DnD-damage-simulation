@@ -177,11 +177,11 @@ test("effects expire only at next source turn and independent public scenario in
 	assert.equal(second.encounter.state("first").hitPoints, 30);
 	assert.equal(second.encounter.hasUsed("hero", "savage-attacker"), false);
 	assert.deepEqual(second.encounter.effectsOn("first"), []);
-	first.encounter.endTurn();
-	first.encounter.beginTurn("second");
+	first.engine.endTurn();
+	first.engine.beginTurn("second");
 	assert.equal(first.encounter.effectiveSpeed("first"), 20);
-	first.encounter.endTurn();
-	first.encounter.beginTurn("hero");
+	first.engine.endTurn();
+	first.engine.beginTurn("hero");
 	assert.equal(first.encounter.effectiveSpeed("first"), 30);
 	assert.equal(first.encounter.hasAttackDisadvantage("first"), false);
 	assert.equal(first.encounter.hasUsed("hero", "savage-attacker"), false);
@@ -233,7 +233,7 @@ test("Hew's kill trigger includes Melee weapon damage on a miss (Graze interacti
 			},
 		],
 	});
-	encounter.beginTurn("hero");
+	engine.beginTurn("hero");
 	const result = engine.resolveSingleAttack({
 		actorId: "hero",
 		targetId: "first",

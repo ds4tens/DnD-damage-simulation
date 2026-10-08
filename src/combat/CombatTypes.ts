@@ -1,4 +1,5 @@
 import type BaseCharacter from "../character/BaseCharacter.ts";
+import type { TStatsType } from "../character/BaseCharacter.ts";
 import type { DiceRoller } from "../dice/RandomSource.ts";
 import type { FeatName } from "../feats/FeatTypes.ts";
 import type Weapon from "../Items/Weapon.ts";
@@ -6,7 +7,9 @@ import type { TConditionState } from "../modifiers/Conditions.ts";
 import type { TCombatModifier } from "../modifiers/Modifiers.ts";
 import type BaseMonster from "../monster/BaseMonster.ts";
 import type { DamageComponent, DamagePool, DamageResult, RolledDamageDie } from "./DamageTypes.ts";
-import type { CombatantState, EncounterState, TimedEffect } from "./EncounterState.ts";
+import type { CombatantState, EffectInput, EncounterState } from "./EncounterState.ts";
+import type { ZeroHpBehavior } from "./HitPointTypes.ts";
+import type { SavingThrowResult } from "./SavingThrowTypes.ts";
 import type { CombatStrategy } from "./Strategy.ts";
 
 export type CombatantDefinition = BaseCharacter | BaseMonster;
@@ -14,14 +17,39 @@ export type CombatantInput = {
 	id: string;
 	definition: CombatantDefinition;
 	initialClassState?: Record<string, number | boolean | string>;
+	initialHitPoints?: number;
+	initialTemporaryHp?: number;
+	zeroHpBehavior?: ZeroHpBehavior;
+	weapons?: readonly WeaponInstance[];
+	initialHands?: HandState;
+	masteredWeaponNames?: readonly string[];
 };
-export type ActionSource = "attack-action" | "bonus-action" | "reaction" | "other";
+export type WeaponInstance = { id: string; weapon: Weapon };
+export type HandState = { left: string | null; right: string | null };
+/** Runtime identity is checked by the issuing engine; fields alone grant no authority. */
+export type AttackActionHandle = Readonly<{ id: string; actorId: string; turnId: number }>;
+export type AttackGrant = Readonly<{ id: string; actorId: string; turnId: number }>;
+export type ActionSource = "attack-action" | "bonus-action" | "reaction";
+export type AttackOrigin = "primary" | "light" | "nick" | "cleave" | "hew" | "scenario";
 export type AttackMode = "melee" | "ranged" | "thrown";
 export type AttackRequest = {
 	actorId: string;
 	targetId: string;
 	actionSource: ActionSource;
 	actionId?: string;
+	action?: AttackActionHandle;
+	grant?: AttackGrant;
+	attackOrigin?: AttackOrigin;
+	parentAttackId?: string;
+	weaponInstanceId?: string;
+	ability?: TStatsType;
+	grip?: "one-handed" | "two-handed";
+	equip?: {
+		kind: "draw" | "stow";
+		weaponInstanceId: string;
+		hand: "left" | "right" | "both";
+		when: "before" | "after";
+	};
 	mode: AttackMode;
 	weapon?: Weapon;
 	distance?: number;
@@ -43,6 +71,10 @@ export type AttackResult = {
 	targetId: string;
 	turnId: number;
 	actionSource: ActionSource;
+	actionId?: string;
+	attackOrigin: AttackOrigin;
+	parentAttackId?: string;
+	roundNumber: number;
 	source: string;
 	attackIndexInTurn: number;
 	hit: HitResult;
@@ -50,6 +82,7 @@ export type AttackResult = {
 	decisions: readonly DecisionRecord[];
 	triggeredAttacks: readonly AttackResult[];
 	limitations: readonly string[];
+	savingThrows?: readonly SavingThrowResult[];
 };
 export type AttackActionResult = { totalDamage: number; attacks: readonly AttackResult[] };
 export type DecisionRecord = { feature: string; choice: boolean | string | null; candidates?: readonly DamagePool[] };
@@ -72,6 +105,7 @@ export type AttackContext = {
 	roller: DiceRoller;
 	attacker: CombatantDefinition;
 	character: BaseCharacter | undefined;
+	attackAbility: TStatsType;
 	target: CombatantDefinition;
 	actorState: CombatantState;
 	targetState: CombatantState;
@@ -90,7 +124,7 @@ export type AttackContext = {
 	choosePunctureDie(dice: readonly RolledDamageDie[]): string | null;
 	choosePiercerCriticalDie(dice: readonly RolledDamageDie[]): string | null;
 	chooseHewTarget(): string | null;
-	addEffect(effect: Omit<TimedEffect, "createdTurnId">): void;
+	addEffect(effect: EffectInput): void;
 };
 export type HitContext = AttackContext & { hit: HitResult };
 export type TriggeredAttack = { targetId: string; source: string };
@@ -117,6 +151,29 @@ export type CombatEngineOptions = {
 	canAttack?: AttackEligibility;
 	/** Optional scenario geometry, recomputed when Hew switches targets. */
 	distanceFor?: (actorId: string, targetId: string) => number | undefined;
+	/** Trusted scenario reaction triggers are opt-in; their attacks still spend Reaction. */
+	allowScenarioReactions?: boolean;
+	cleaveCandidates?: (actorId: string, primaryTargetId: string, turnId: number) => readonly CleaveCandidate[];
+};
+export type AttackSelection = Omit<AttackRequest, "actorId" | "actionSource" | "actionId" | "action" | "grant">;
+export type CleaveCandidate = { targetId: string; distanceToActor: number; distanceToPrimary: number };
+export type PreparedWeaponAttack = {
+	instance: WeaponInstance;
+	attackAbility: TStatsType;
+	attackBonus: number;
+	damageComponents: readonly DamageComponent[];
+	attackModifiers: readonly TCombatModifier[];
+	nextHands: HandState;
+	manipulationCost: number;
+	loadingKey?: string;
+	thrownInstanceId?: string;
+	limitations: readonly string[];
+};
+export type MasteryHitContribution = {
+	effects?: readonly EffectInput[];
+	addConditions?: readonly TConditionState[];
+	cleaveEligible?: boolean;
+	savingThrows?: readonly SavingThrowResult[];
 };
 
 // Existing names remain aliases while consumers migrate to the encounter API.

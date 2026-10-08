@@ -86,7 +86,7 @@ export function createFiveFeatScenario(
 			doublesOnCrit: true,
 		},
 	];
-	encounter.beginTurn("hero");
+	engine.beginTurn("hero");
 	const run = () =>
 		engine.resolveSingleAttack({
 			actorId: "hero",

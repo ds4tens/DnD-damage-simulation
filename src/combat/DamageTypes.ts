@@ -1,3 +1,5 @@
+import type { DeathSaveState, LifeState } from "./HitPointTypes.ts";
+
 export type DamageType =
 	| "acid"
 	| "bludgeoning"
@@ -33,6 +35,11 @@ export type RolledDamageDie = {
 export type RolledDamageComponent = Omit<DamageComponent, "dice"> & { dice: readonly RolledDamageDie[] };
 export type DamagePool = readonly RolledDamageComponent[];
 export type DamageByType = Partial<Record<DamageType, number>>;
+export type DamageDefenses = {
+	resistances: readonly DamageType[];
+	immunities: readonly DamageType[];
+	vulnerabilities: readonly DamageType[];
+};
 export type HpChangeEvent = {
 	targetId: string;
 	previousHp: number;
@@ -40,11 +47,20 @@ export type HpChangeEvent = {
 	damageTaken: number;
 	hpLost: number;
 	reducedToZero: boolean;
+	previousTemporaryHp: number;
+	currentTemporaryHp: number;
+	temporaryHpLost: number;
+	overflow: number;
+	previousLifeState: LifeState;
+	currentLifeState: LifeState;
+	previousDeathSaves: DeathSaveState;
+	currentDeathSaves: DeathSaveState;
 };
 export type DamageResult = {
 	components: DamagePool;
 	rolledDamage: number;
 	appliedDamage: number;
 	byType: DamageByType;
+	appliedByType: DamageByType;
 	hp: HpChangeEvent;
 };

@@ -16,6 +16,12 @@ import { EFeatName } from "./Feats.ts";
 import { piercerHook } from "./Piercer.ts";
 import { savageAttackerHook } from "./SavageAttacker.ts";
 
+/** Synthetic Extra Attack supplies legal slots for isolated feature phase tests. */
+class TestAttackClass extends BaseClass {
+	override getAttackCount(_level: number): number {
+		return 8;
+	}
+}
 const spear = new Weapon("Spear", "", "simple", "common", 1, 1, "medium", [new Dice(8)], "piercing");
 const greatsword = new Weapon(
 	"Greatsword",
@@ -56,7 +62,7 @@ function fixture(
 	const hooks = options.hooks ?? [savageAttackerHook, piercerHook];
 	const hero = new BaseCharacter(
 		4,
-		new BaseClass([weapon]),
+		new TestAttackClass([weapon]),
 		weapon,
 		"strength",
 		{
@@ -90,15 +96,17 @@ function fixture(
 	const roller = new FixedDiceRoller(rolls);
 	const engine = new CombatEngine(encounter, {
 		roller,
+		allowScenarioReactions: true,
 		hooks,
 		...(options.strategy ? { strategy: options.strategy } : {}),
 	});
-	encounter.beginTurn("hero");
+	engine.beginTurn("hero");
 	const request: AttackRequest = {
 		actorId: "hero",
 		targetId: "enemy",
 		mode: weapon.category === "ranged" ? "ranged" : "melee",
 		actionSource: "attack-action",
+		action: engine.beginAttackAction("hero"),
 	};
 	return { encounter, engine, roller, request, hero };
 }
@@ -290,15 +298,17 @@ test("Savage then Piercer preserves phase order and Puncture can reroll the chos
 	);
 	assert.equal(f.roller.remaining, 0);
 });
-test("both once-per-turn feats support off-turn attacks and reset only on explicit global turn", () => {
+test("both once-per-turn feats share own-turn Reaction and Attack action usage and reset on next turn", () => {
 	const f = fixture([10, 1, 2, 7, 10, 3, 10, 1, 2, 8]);
-	f.encounter.endTurn();
-	f.encounter.beginTurn("enemy");
-	const reaction = { ...f.request, actionSource: "reaction" as const };
+	const reactionRequest = { ...f.request, actionSource: "reaction" as const };
+	const reaction = { ...reactionRequest, grant: f.engine.grantScenarioReaction(reactionRequest) };
 	assert.equal(f.engine.resolveSingleAttack(reaction).damage?.rolledDamage, 10);
-	assert.equal(f.engine.resolveSingleAttack(reaction).damage?.rolledDamage, 6);
-	f.encounter.endTurn();
-	f.encounter.beginTurn("hero");
+	assert.throws(() => f.engine.resolveSingleAttack(reaction), /grant/);
+	assert.equal(f.engine.resolveSingleAttack(f.request).damage?.rolledDamage, 6);
+
+	f.engine.endTurn();
+	f.engine.beginTurn("hero");
+	f.request.action = f.engine.beginAttackAction("hero");
 	assert.equal(f.engine.resolveSingleAttack(f.request).damage?.rolledDamage, 11);
 	assert.equal(f.roller.remaining, 0);
 });
@@ -310,11 +320,14 @@ test("independent encounters reuse the same build without inheriting feat usage 
 		{ id: "enemy", definition: new BaseMonster("Target", 10, 1000) },
 	]);
 	const roller = new FixedDiceRoller([10, 1, 2, 7]);
-	encounter.beginTurn("hero");
 	const engine = new CombatEngine(encounter, { roller, hooks: [piercerHook, savageAttackerHook] });
+	engine.beginTurn("hero");
 	assert.equal(encounter.hasUsed("hero", "savage-attacker"), false);
 	assert.equal(encounter.hasUsed("hero", "piercer.puncture"), false);
-	assert.equal(engine.resolveSingleAttack(first.request).damage?.rolledDamage, 10);
+	assert.equal(
+		engine.resolveSingleAttack({ ...first.request, action: engine.beginAttackAction("hero") }).damage?.rolledDamage,
+		10,
+	);
 	assert.equal(encounter.state("enemy").hitPoints, 990);
 	assert.equal(roller.remaining, 0);
 });

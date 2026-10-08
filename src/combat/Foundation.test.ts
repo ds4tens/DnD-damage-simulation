@@ -18,8 +18,14 @@ import { allDamageDice, appendAdditionalDie, rerollDamageDie, rollDamageComponen
 import type { DamageComponent } from "./DamageTypes.ts";
 import { EncounterState } from "./EncounterState.ts";
 
+/** Synthetic Extra Attack supplies legal slots for isolated feature phase tests. */
+class TestAttackClass extends BaseClass {
+	override getAttackCount(_level: number): number {
+		return 8;
+	}
+}
 const weapon = new Weapon("Test spear", "", "simple", "common", 1, 1, "medium", [new Dice(8)], "piercing");
-function character(characterClass = new BaseClass([weapon]), level = 4): BaseCharacter {
+function character(characterClass = new TestAttackClass([weapon]), level = 4): BaseCharacter {
 	return new BaseCharacter(
 		level,
 		characterClass,
@@ -58,11 +64,18 @@ function fixture(
 	const roller = new FixedDiceRoller(rolls);
 	const engine = new CombatEngine(encounter, {
 		roller,
+		allowScenarioReactions: true,
 		hooks: options.hooks ?? [],
 		...(options.strategy ? { strategy: options.strategy } : {}),
 	});
-	encounter.beginTurn("hero");
-	const request: AttackRequest = { actorId: "hero", targetId: "enemy", mode: "melee", actionSource: "attack-action" };
+	engine.beginTurn("hero");
+	const request: AttackRequest = {
+		actorId: "hero",
+		targetId: "enemy",
+		mode: "melee",
+		actionSource: "attack-action",
+		action: engine.beginAttackAction("hero"),
+	};
 	return { hero, encounter, roller, engine, request };
 }
 const extra: DamageComponent = {
@@ -225,6 +238,14 @@ test("HP floors at zero, overkill stays damage and an already-zero target produc
 		damageTaken: 11,
 		hpLost: 5,
 		reducedToZero: true,
+		previousTemporaryHp: 0,
+		currentTemporaryHp: 0,
+		temporaryHpLost: 0,
+		overflow: 6,
+		previousLifeState: "alive",
+		currentLifeState: "alive",
+		previousDeathSaves: { successes: 0, failures: 0 },
+		currentDeathSaves: { successes: 0, failures: 0 },
 	});
 	const second = f.engine.resolveSingleAttack(f.request);
 	assert.equal(second.damage?.hp.reducedToZero, false);
@@ -246,12 +267,23 @@ test("once-per-turn state spans separate calls and reactions; only explicit begi
 	});
 	f.engine.resolveSingleAttack(f.request);
 	assert.throws(() => f.encounter.beginTurn("hero"), /End/);
-	f.engine.resolveSingleAttack({ ...f.request, actionSource: "reaction" });
+	f.engine.resolveSingleAttack({
+		...f.request,
+		actionSource: "reaction",
+		grant: f.engine.grantScenarioReaction({ ...f.request, actionSource: "reaction" }),
+	});
 	f.encounter.endTurn();
-	f.encounter.beginTurn("enemy");
-	f.engine.resolveSingleAttack({ ...f.request, actionSource: "reaction" });
+	f.engine.beginTurn("hero"); // Restore Reaction only on the actor's next own turn.
+	f.engine.endTurn();
+	f.engine.beginTurn("enemy");
+	f.engine.resolveSingleAttack({
+		...f.request,
+		actionSource: "reaction",
+		grant: f.engine.grantScenarioReaction({ ...f.request, actionSource: "reaction" }),
+	});
 	f.encounter.endTurn();
-	f.encounter.beginTurn("hero");
+	f.engine.beginTurn("hero");
+	f.request.action = f.engine.beginAttackAction("hero");
 	f.engine.resolveSingleAttack(f.request);
 	assert.deepEqual(seen, [false, true, false, false]);
 });
@@ -315,15 +347,27 @@ test("timed outgoing disadvantage affects explicit monster attacks and cancels a
 	};
 	assert.deepEqual(f.engine.resolveSingleAttack(request).hit.d20Rolls, [19, 2]);
 	f.encounter.state("enemy").conditions.push({ name: "invisible" });
-	assert.deepEqual(f.engine.resolveSingleAttack(request).hit.d20Rolls, [11]);
+	const reaction = { ...request, actionSource: "reaction" as const };
+	assert.deepEqual(
+		f.engine.resolveSingleAttack({ ...reaction, grant: f.engine.grantScenarioReaction(reaction) }).hit.d20Rolls,
+		[11],
+	);
 });
 test("bonus action belongs to the turn owner and is consumed exactly once", () => {
-	const f = fixture([10, 1]);
+	const f = fixture([10, 1, 10, 1], {
+		hooks: [
+			{
+				id: "test.bonus",
+				afterAttack: (ctx) =>
+					ctx.encounter.canUseBonusAction("hero") ? [{ targetId: "enemy", source: "test.bonus" }] : [],
+			},
+		],
+	});
 	assert.equal(f.encounter.canUseBonusAction("enemy"), false);
 	assert.throws(() => f.encounter.spendBonusAction("enemy"), /unavailable/);
-	f.engine.resolveSingleAttack({ ...f.request, actionSource: "bonus-action" });
+	f.engine.resolveSingleAttack(f.request);
 	assert.equal(f.encounter.canUseBonusAction("hero"), false);
-	assert.throws(() => f.engine.resolveSingleAttack({ ...f.request, actionSource: "bonus-action" }), /unavailable/);
+	assert.throws(() => f.engine.resolveSingleAttack({ ...f.request, actionSource: "bonus-action" }), /grant/);
 	f.encounter.endTurn();
 	f.encounter.beginTurn("hero");
 	assert.equal(f.encounter.canUseBonusAction("hero"), true);
@@ -457,7 +501,7 @@ test("Zealot Divine Fury keeps chosen type, flat level bonus and injected critic
 test("explicit unsupported feats/mastery fail; partial classes report structured limitations", () => {
 	assert.throws(
 		() =>
-			new BaseCharacter(4, new BaseClass([weapon]), weapon, "strength", character().stats, 16, 50, [
+			new BaseCharacter(4, new TestAttackClass([weapon]), weapon, "strength", character().stats, 16, 50, [
 				{ name: EFeatName.PIERCER },
 			]),
 		/Invalid ability score/,

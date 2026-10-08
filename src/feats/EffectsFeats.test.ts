@@ -14,6 +14,12 @@ import { EFeatName } from "./Feats.ts";
 import { greatWeaponMasterHook } from "./GreatWeaponMaster.ts";
 import { slasherHook } from "./Slasher.ts";
 
+/** Synthetic Extra Attack supplies legal slots for isolated feature phase tests. */
+class TestAttackClass extends BaseClass {
+	override getAttackCount(_level: number): number {
+		return 8;
+	}
+}
 const sword = makeWeapon();
 function makeWeapon(
 	metadata: WeaponCombatMetadata = { category: "melee", properties: ["heavy"] },
@@ -24,7 +30,7 @@ function makeWeapon(
 function hero(weapon: Weapon, feats: EFeatName[]) {
 	return new BaseCharacter(
 		5,
-		new BaseClass([weapon]),
+		new TestAttackClass([weapon]),
 		weapon,
 		"strength",
 		{
@@ -69,17 +75,19 @@ function fixture(
 	const roller = new FixedDiceRoller(rolls);
 	const engine = new CombatEngine(encounter, {
 		roller,
+		allowScenarioReactions: true,
 		hooks: [slasherHook, greatWeaponMasterHook, ...(options.hooks ?? [])],
 		strategy: { chooseHewTarget: () => null, ...options.strategy },
 		...(options.distanceFor ? { distanceFor: options.distanceFor } : {}),
 	});
-	encounter.beginTurn("hero");
+	engine.beginTurn("hero");
 	const request: AttackRequest = {
 		actorId: "hero",
 		targetId: "enemy",
 		actionSource: "attack-action",
 		mode: weapon.category,
 		weapon,
+		action: engine.beginAttackAction("hero"),
 	};
 	return { encounter, engine, roller, request };
 }
@@ -131,22 +139,27 @@ test("Slasher declined Hamstring does not disable critical effect or consume usa
 test("Slasher retains distinct simultaneous sources until each source's next turn; speed floors at zero", () => {
 	const { encounter, engine, request } = fixture([d20(20), d10(1), d10(1), d20(20), d10(1), d10(1)]);
 	engine.resolveSingleAttack(request);
-	engine.resolveSingleAttack({ ...request, actorId: "ally", actionSource: "reaction" });
+	engine.resolveSingleAttack({
+		...request,
+		actorId: "ally",
+		actionSource: "reaction",
+		grant: engine.grantScenarioReaction({ ...request, actorId: "ally", actionSource: "reaction" }),
+	});
 	assert.equal(encounter.effectiveSpeed("enemy"), 20);
 	assert.deepEqual(
 		encounter.effectsOn("enemy").map((effect) => effect.sourceId),
 		["hero", "hero", "ally", "ally"],
 	);
-	encounter.endTurn();
-	encounter.beginTurn("enemy");
+	engine.endTurn();
+	engine.beginTurn("enemy");
 	assert.equal(encounter.effectsOn("enemy").length, 4);
-	encounter.endTurn();
-	encounter.beginTurn("hero");
+	engine.endTurn();
+	engine.beginTurn("hero");
 	assert.equal(encounter.effectiveSpeed("enemy"), 20);
 	assert.equal(encounter.hasAttackDisadvantage("enemy"), true);
 	assert.equal(encounter.effectsOn("enemy").length, 2);
-	encounter.endTurn();
-	encounter.beginTurn("ally");
+	engine.endTurn();
+	engine.beginTurn("ally");
 	assert.equal(encounter.effectiveSpeed("enemy"), 30);
 	assert.equal(encounter.hasAttackDisadvantage("enemy"), false);
 	const slow = fixture([d20(10), d10(1)], { speed: 5 });
@@ -160,9 +173,14 @@ test("Slasher applies to ranged Slashing and resets usage on a new global turn; 
 	assert.equal(ranged.encounter.hasUsed("hero", "slasher.hamstring"), false);
 	ranged.engine.resolveSingleAttack(ranged.request);
 	assert.equal(ranged.encounter.effectiveSpeed("enemy"), 20);
-	ranged.encounter.endTurn();
-	ranged.encounter.beginTurn("enemy");
-	ranged.engine.resolveSingleAttack({ ...ranged.request, targetId: "other", actionSource: "reaction" });
+	ranged.engine.endTurn();
+	ranged.engine.beginTurn("enemy");
+	ranged.engine.resolveSingleAttack({
+		...ranged.request,
+		targetId: "other",
+		actionSource: "reaction",
+		grant: ranged.engine.grantScenarioReaction({ ...ranged.request, targetId: "other", actionSource: "reaction" }),
+	});
 	assert.equal(ranged.encounter.effectiveSpeed("other"), 20);
 	const piercing = fixture([d20(20), d10(2), d10(3)], { weapon: makeWeapon({ category: "ranged" }, "piercing") });
 	piercing.engine.resolveSingleAttack(piercing.request);
@@ -172,7 +190,7 @@ test("Slasher applies to ranged Slashing and resets usage on a new global turn; 
 
 test("Slasher gives monster outgoing Disadvantage on all attacks and external Advantage cancels", () => {
 	for (const advantage of [false, true]) {
-		const { encounter, engine, request, roller } = fixture(
+		const { engine, request, roller } = fixture(
 			[d20(20), d10(1), d10(1), ...(advantage ? [d20(18)] : [d20(18), d20(4)])],
 			{
 				hooks: advantage
@@ -187,12 +205,12 @@ test("Slasher gives monster outgoing Disadvantage on all attacks and external Ad
 			},
 		);
 		engine.resolveSingleAttack(request);
-		encounter.endTurn();
-		encounter.beginTurn("enemy");
+		engine.endTurn();
+		engine.beginTurn("enemy");
 		const result = engine.resolveSingleAttack({
 			actorId: "enemy",
 			targetId: "hero",
-			actionSource: "other",
+			actionSource: "attack-action",
 			mode: "ranged",
 			profile: { attackBonus: 0, damage: [] },
 		});
@@ -219,15 +237,29 @@ test("Heavy Weapon Mastery adds PB to every own-turn Attack action hit including
 	}
 });
 
-test("Heavy Weapon Mastery excludes off-turn, Reaction, other, Bonus Action, non-Heavy and refusal", () => {
-	for (const actionSource of ["reaction", "other", "bonus-action"] as const) {
+test("Heavy Weapon Mastery excludes off-turn Reactions, non-Heavy and refusal; Hew covers Bonus Action", () => {
+	for (const actionSource of ["reaction"] as const) {
 		const { engine, request } = fixture([d20(10), d10(5)]);
-		assert.equal(engine.resolveSingleAttack({ ...request, actionSource }).damage?.rolledDamage, 9);
+		assert.equal(
+			engine.resolveSingleAttack({
+				...request,
+				actionSource,
+				grant: engine.grantScenarioReaction({ ...request, actionSource }),
+			}).damage?.rolledDamage,
+			9,
+		);
 	}
 	const offTurn = fixture([d20(10), d10(5)]);
-	offTurn.encounter.endTurn();
-	offTurn.encounter.beginTurn("enemy");
-	assert.equal(offTurn.engine.resolveSingleAttack(offTurn.request).damage?.rolledDamage, 9);
+	offTurn.engine.endTurn();
+	offTurn.engine.beginTurn("enemy");
+	const offTurnRequest = { ...offTurn.request, actionSource: "reaction" as const };
+	assert.equal(
+		offTurn.engine.resolveSingleAttack({
+			...offTurnRequest,
+			grant: offTurn.engine.grantScenarioReaction(offTurnRequest),
+		}).damage?.rolledDamage,
+		9,
+	);
 	for (const options of [{ weapon: makeWeapon({ category: "melee" }) }, { strategy: { useFeature: () => false } }]) {
 		const { engine, request } = fixture([d20(10), d10(5)], options);
 		assert.equal(engine.resolveSingleAttack(request).damage?.rolledDamage, 9);
@@ -310,11 +342,19 @@ test("Hew excludes off-turn, spent Bonus Action, noncritical zero-HP target and 
 			},
 		});
 		if (variant === "off-turn") {
-			encounter.endTurn();
-			encounter.beginTurn("enemy");
+			engine.endTurn();
+			engine.beginTurn("enemy");
 		}
 		if (variant === "spent") encounter.spendBonusAction("hero");
-		const result = engine.resolveSingleAttack({ ...request, distance: 1 });
+		const selected = { ...request, distance: 1 };
+		const result =
+			variant === "off-turn"
+				? engine.resolveSingleAttack({
+						...selected,
+						actionSource: "reaction",
+						grant: engine.grantScenarioReaction({ ...selected, actionSource: "reaction" }),
+					})
+				: engine.resolveSingleAttack(selected);
 		assert.equal(result.triggeredAttacks.length, 0);
 		assert.equal(offers, 0);
 	}
