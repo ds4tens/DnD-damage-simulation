@@ -7,19 +7,20 @@ import { slasherHook } from "./Slasher.ts";
 
 export type FeatRule = FeatMetadata & { readonly combatHook?: CombatHook };
 /** Canonical base-2024 registry. Extensions must be requested explicitly by engine callers. */
-export const featRegistry: Readonly<Record<FeatName, FeatRule>> = Object.freeze({
-	"ability-score-improvement": featMetadata["ability-score-improvement"],
-	"savage-attacker": Object.freeze({
-		...featMetadata["savage-attacker"],
-		combatHook: Object.freeze(savageAttackerHook),
-	}),
-	piercer: Object.freeze({ ...featMetadata.piercer, combatHook: Object.freeze(piercerHook) }),
-	slasher: Object.freeze({ ...featMetadata.slasher, combatHook: Object.freeze(slasherHook) }),
-	"great-weapon-master": Object.freeze({
-		...featMetadata["great-weapon-master"],
-		combatHook: Object.freeze(greatWeaponMasterHook),
-	}),
-});
+const implementedHooks: Partial<Record<FeatName, CombatHook>> = {
+	"savage-attacker": savageAttackerHook,
+	piercer: piercerHook,
+	slasher: slasherHook,
+	"great-weapon-master": greatWeaponMasterHook,
+};
+export const featRegistry: Readonly<Record<FeatName, FeatRule>> = Object.freeze(
+	Object.fromEntries(
+		Object.entries(featMetadata).map(([name, rule]) => {
+			const hook = implementedHooks[name as FeatName];
+			return [name, Object.freeze({ ...rule, ...(hook ? { combatHook: Object.freeze(hook) } : {}) })];
+		}),
+	) as Record<FeatName, FeatRule>,
+);
 export const featCombatHooks: readonly CombatHook[] = Object.freeze(
 	Object.values(featRegistry).flatMap((rule) => (rule.combatHook ? [rule.combatHook] : [])),
 );

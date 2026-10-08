@@ -1,0 +1,250 @@
+import assert from "node:assert/strict";
+import test from "node:test";
+import { featMetadata } from "../feats/FeatTypes.ts";
+import { armorCatalog, deriveArmorClass, deriveBarbarianHitPoints } from "../Items/Armor.ts";
+import { Club } from "../Items/Weapon/WeaponList.ts";
+import {
+	assertLegalCharacterBuild,
+	assessBuildSupport,
+	buildLegalCharacter,
+	type CharacterBuildSelection,
+	combatantInputForBuild,
+	validatePointBuy,
+} from "./CharacterBuild.ts";
+import { backgroundMetadata, speciesMetadata } from "./Origins.ts";
+
+export function sampleSelection(level = 1): CharacterBuildSelection {
+	return {
+		ruleset: "phb-2024",
+		className: "barbarian",
+		level,
+		...(level >= 3 ? { subclass: "berserker" as const } : {}),
+		pointBuy: { strength: 15, dexterity: 14, constitution: 14, intelligence: 8, wisdom: 12, charisma: 8 },
+		background: {
+			id: "soldier",
+			abilityScoreIncreases: [
+				{ abilityScore: "strength", amount: 2 },
+				{ abilityScore: "constitution", amount: 1 },
+			],
+			toolChoice: "dice-set",
+		},
+		species: { id: "dwarf" },
+		classSkills: ["nature", "survival"],
+		progression: [4, 8, 12, 16, 19]
+			.filter((l) => l <= level)
+			.map((l) => ({
+				level: l as 4 | 8 | 12 | 16 | 19,
+				feat: { name: "ability-score-improvement", abilityScoreImprovement: [{ abilityScore: "strength", amount: 2 }] },
+			})),
+		equipment: {
+			armorId: "none",
+			shield: false,
+			weapons: [{ id: "staff", weaponId: "quarterstaff" }],
+			hands: { left: "staff", right: null },
+		},
+		masteredWeaponIds: ["quarterstaff"],
+	};
+}
+test("complete factual PHB2024 catalogs retain source pages and separate benefit statuses", () => {
+	assert.equal(Object.keys(featMetadata).length, 75);
+	assert.equal(Object.keys(backgroundMetadata).length, 16);
+	assert.equal(Object.keys(speciesMetadata).length, 10);
+	assert.equal(Object.keys(armorCatalog).length, 13);
+	assert.equal(featMetadata["war-caster"].requiredFeaturesAnyOf.includes("Spellcasting"), true);
+	assert.equal(featMetadata["boon-of-irresistible-offense"].abilityScoreImprovement.maximumScore, 30);
+	assert.equal(featMetadata["great-weapon-master"].source.page, 204);
+});
+test("27-point buy validates independent published costs and pre-background range", () => {
+	validatePointBuy(sampleSelection().pointBuy);
+	assert.throws(() => validatePointBuy({ ...sampleSelection().pointBuy, charisma: 15 }), /27-point/);
+	assert.throws(() => validatePointBuy({ ...sampleSelection().pointBuy, strength: 16 }), /8 to 15/);
+	validatePointBuy({ strength: 8, dexterity: 8, constitution: 8, intelligence: 8, wisdom: 8, charisma: 8 });
+});
+test("legal factory earns slots by level, rejects raw/serialized provenance and detaches definitions", () => {
+	const selection = sampleSelection(4);
+	const build = buildLegalCharacter(selection);
+	assert.equal(build.character.stats.strength, 19);
+	assert.equal(selection.pointBuy.strength, 15);
+	assert.equal(build.character.feats.length, 2);
+	assert.equal(combatantInputForBuild(build, "hero").definition, build.character);
+	assert.equal(Object.isFrozen(build.character.stats), true);
+	assert.throws(() => assertLegalCharacterBuild({ ...build }), /factory-validated/);
+	assert.throws(() => assertLegalCharacterBuild(JSON.parse(JSON.stringify(build))), /factory-validated/);
+	assert.throws(() => buildLegalCharacter({ ...selection, progression: [] }), /slots/);
+	assert.throws(() => buildLegalCharacter({ ...sampleSelection(), subclass: "berserker" }), /before level 3/);
+	assert.equal(Object.isFrozen(Club), false);
+});
+test("Epic19 then Primal Champion20 follows different caps and retroactive HP Constitution", () => {
+	const selection = sampleSelection(20);
+	const build = buildLegalCharacter({
+		...selection,
+		progression: [
+			{
+				level: 4,
+				feat: { name: "great-weapon-master", abilityScoreImprovement: [{ abilityScore: "strength", amount: 1 }] },
+			},
+			{
+				level: 8,
+				feat: { name: "ability-score-improvement", abilityScoreImprovement: [{ abilityScore: "strength", amount: 2 }] },
+			},
+			{
+				level: 12,
+				feat: {
+					name: "ability-score-improvement",
+					abilityScoreImprovement: [{ abilityScore: "constitution", amount: 2 }],
+				},
+			},
+			{
+				level: 16,
+				feat: {
+					name: "ability-score-improvement",
+					abilityScoreImprovement: [{ abilityScore: "constitution", amount: 2 }],
+				},
+			},
+			{
+				level: 19,
+				feat: {
+					name: "boon-of-irresistible-offense",
+					abilityScoreImprovement: [{ abilityScore: "strength", amount: 1 }],
+				},
+			},
+		],
+	});
+	assert.equal(build.character.stats.strength, 25);
+	assert.equal(build.character.stats.constitution, 23);
+	assert.equal(build.character.hitPoints, 12 + 6 + 19 * (7 + 6) + 20);
+});
+test("prerequisites are checked before the own ASI and at actual acquisition", () => {
+	const s = sampleSelection(4);
+	const dex12 = { ...s.pointBuy, dexterity: 12 };
+	assert.throws(
+		() =>
+			buildLegalCharacter({
+				...s,
+				pointBuy: dex12,
+				progression: [
+					{
+						level: 4,
+						feat: { name: "crossbow-expert", abilityScoreImprovement: [{ abilityScore: "dexterity", amount: 1 }] },
+					},
+				],
+			}),
+		/prerequisite/,
+	);
+	assert.throws(
+		() =>
+			buildLegalCharacter({
+				...s,
+				progression: [
+					{
+						level: 4,
+						feat: {
+							name: "boon-of-combat-prowess",
+							abilityScoreImprovement: [{ abilityScore: "strength", amount: 1 }],
+						},
+					},
+				],
+			}),
+		/level 19/,
+	);
+	assert.throws(
+		() => buildLegalCharacter({ ...s, progression: [{ level: 4, feat: { name: "archery" } }] }),
+		/named feature/,
+	);
+	assert.throws(
+		() =>
+			buildLegalCharacter({
+				...s,
+				progression: [
+					{ level: 4, feat: { name: "war-caster", abilityScoreImprovement: [{ abilityScore: "wisdom", amount: 1 }] } },
+				],
+			}),
+		/named feature/,
+	);
+});
+test("Human Origin slot, background spell list and repeated Magic Initiate enforce choices", () => {
+	const s = sampleSelection();
+	const human = buildLegalCharacter({
+		...s,
+		species: { id: "human", skill: "insight" },
+		humanOriginFeat: { name: "tavern-brawler" },
+	});
+	assert.equal(human.character.feats.length, 2);
+	assert.equal(human.combatDefaults.size, "medium");
+	assert.throws(() => buildLegalCharacter({ ...s, species: { id: "human", skill: "insight" } }), /Origin feat/);
+	assert.throws(() => buildLegalCharacter({ ...s, humanOriginFeat: { name: "tavern-brawler" } }), /Only Human/);
+	const sage: CharacterBuildSelection = {
+		...s,
+		background: {
+			id: "sage",
+			abilityScoreIncreases: [
+				{ abilityScore: "constitution", amount: 2 },
+				{ abilityScore: "wisdom", amount: 1 },
+			],
+			featChoices: {
+				spellList: "wizard",
+				spellcastingAbility: "wisdom",
+				cantrips: ["fire-bolt", "mage-hand"],
+				spells: ["shield"],
+			},
+		},
+	};
+	assert.equal(buildLegalCharacter(sage).character.stats.constitution, 16);
+	assert.throws(
+		() =>
+			buildLegalCharacter({
+				...sage,
+				background: {
+					...sage.background,
+					featChoices: { ...sage.background.featChoices, cantrips: ["guidance", "mage-hand"] },
+				},
+			}),
+		/cantrip/,
+	);
+});
+test("armor AC, shield hands, heavy negative Dex and fixed HP are derived from final build", () => {
+	const s = sampleSelection();
+	const shield = buildLegalCharacter({
+		...s,
+		equipment: { ...s.equipment, armorId: "half-plate", shield: true, hands: { left: "staff", right: "$shield" } },
+	});
+	assert.equal(shield.character.armorClass, 19);
+	assert.equal(shield.character.hitPoints, 15);
+	assert.throws(() => buildLegalCharacter({ ...s, equipment: { ...s.equipment, shield: true } }), /occupy/);
+	assert.throws(
+		() =>
+			buildLegalCharacter({ ...s, equipment: { ...s.equipment, weapons: [{ id: "staff", weaponId: "greatsword" }] } }),
+		/both hands/,
+	);
+	assert.equal(deriveArmorClass({ ...s.pointBuy, dexterity: 8 }, "plate", false), 18);
+	assert.equal(deriveBarbarianHitPoints({ ...s.pointBuy, constitution: 18 }, 5, { tough: true }), 16 + 4 * 11 + 10);
+});
+test("acquired armor training, Resilient save grant, feat mastery and support gate keep distinct benefits", () => {
+	const s = sampleSelection(8);
+	const build = buildLegalCharacter({
+		...s,
+		progression: [
+			{
+				level: 4,
+				feat: { name: "heavily-armored", abilityScoreImprovement: [{ abilityScore: "strength", amount: 1 }] },
+			},
+			{
+				level: 8,
+				feat: { name: "heavy-armor-master", abilityScoreImprovement: [{ abilityScore: "strength", amount: 1 }] },
+			},
+		],
+		equipment: { ...s.equipment, armorId: "plate" },
+	});
+	assert.equal(build.character.armorCategory, "heavy");
+	assert.equal(build.character.armorClass, 18);
+	const charger = buildLegalCharacter({
+		...sampleSelection(4),
+		progression: [
+			{ level: 4, feat: { name: "charger", abilityScoreImprovement: [{ abilityScore: "strength", amount: 1 }] } },
+		],
+	});
+	assert.ok(charger.report.supportedBenefits.includes("charger.ability-score-increase"));
+	assert.ok(charger.report.limitations.some((b) => b.id === "charger.charge-attack"));
+	assert.throws(() => assessBuildSupport(charger, { requestedBenefits: ["charger.charge-attack"] }), /Unsupported/);
+	assert.throws(() => assessBuildSupport(charger, { lighting: "darkness" }), /vision/);
+});

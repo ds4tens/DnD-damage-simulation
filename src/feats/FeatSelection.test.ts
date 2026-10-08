@@ -21,11 +21,12 @@ const half = (name: FeatName, abilityScore: TStatsType = "strength"): FeatSelect
 const resolve = (feats: readonly FeatSelection[], overrides: Partial<TStatBlock> = {}, level = 4) =>
 	resolveFeatSelections({ level, stats: { ...stats, ...overrides }, feats });
 
-test("canonical metadata matches all five 2024 feats and is immutable", () => {
+test("canonical metadata includes the five existing feats in the complete PHB2024 index", () => {
 	assert.equal(EFeatName.ABILITY_SCORE_IMPROVEMENT, "ability-score-improvement");
 	assert.equal(EFeatName.GREAT_WEAPON_MASTER, "great-weapon-master");
-	assert.equal(Object.keys(featMetadata).length, 5);
-	for (const rule of Object.values(featMetadata)) {
+	assert.equal(Object.keys(featMetadata).length, 75);
+	for (const name of Object.values(EFeatName)) {
+		const rule = featMetadata[name];
 		assert.equal(rule.repeatable, rule.name === "ability-score-improvement");
 		assert.equal(rule.type, rule.name === "savage-attacker" ? "origin" : "general");
 		assert.equal(Object.isFrozen(rule), true);

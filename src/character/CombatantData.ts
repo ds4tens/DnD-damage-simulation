@@ -1,5 +1,11 @@
 import type { DamageDefenses, DamageType } from "../combat/DamageTypes.ts";
+import type { FeatValidationContext } from "../feats/FeatSelection.ts";
+import type { ArmorTraining } from "../feats/FeatTypes.ts";
+import type { ArmorCategory } from "../Items/Armor.ts";
+import type { WeaponCatalogId } from "../Items/Weapon/WeaponList.ts";
 import type { TStatsType } from "./BaseCharacter.ts";
+import type { ConsumableStock } from "./CharacterBuildTypes.ts";
+import type { SpeciesSelection, SpeciesSize } from "./Origins.ts";
 
 export const abilityNames: readonly TStatsType[] = [
 	"strength",
@@ -24,7 +30,23 @@ export const damageTypeNames: readonly DamageType[] = [
 	"slashing",
 	"thunder",
 ];
+export type CharacterBuildData = {
+	readonly species: SpeciesSelection;
+	readonly size: SpeciesSize;
+	readonly armorTraining: readonly ArmorTraining[];
+	readonly skills: readonly string[];
+	readonly expertise: readonly string[];
+	readonly tools: readonly string[];
+	readonly featMasteredWeaponIds: readonly WeaponCatalogId[];
+	readonly stock: ConsumableStock;
+};
 export type CombatantOptions = {
+	armorCategory?: ArmorCategory;
+	armorTrained?: boolean;
+	shieldEquipped?: boolean;
+	buildData?: CharacterBuildData;
+	featValidationContext?: FeatValidationContext;
+
 	savingThrowProficiencies?: readonly TStatsType[];
 	/** A full static save bonus, including any ability and proficiency bonuses. */
 	savingThrowBonuses?: Partial<Record<TStatsType, number>>;
