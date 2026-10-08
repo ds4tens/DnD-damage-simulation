@@ -34,7 +34,7 @@ export function validateMasterySelections(encounter: EncounterState, actorId: st
 	}
 }
 
-function selectInstance(encounter: EncounterState, request: AttackRequest): WeaponInstance {
+export function selectWeaponInstance(encounter: EncounterState, request: AttackRequest): WeaponInstance {
 	if (request.weaponInstanceId !== undefined) {
 		const instance = encounter.weaponInstance(request.actorId, request.weaponInstanceId);
 		if (request.weapon && request.weapon.name !== instance.weapon.name)
@@ -99,7 +99,7 @@ export function prepareWeaponAttack(encounter: EncounterState, request: AttackRe
 		throw new Error("Invalid weapon attack mode");
 	const actor = encounter.definition(request.actorId);
 	const state = encounter.state(request.actorId);
-	const instance = selectInstance(encounter, request);
+	const instance = selectWeaponInstance(encounter, request);
 	const weapon = instance.weapon;
 	if (state.spentWeaponInstanceIds.has(instance.id)) throw new Error("Weapon instance has already been thrown");
 	const hands = { ...state.hands };

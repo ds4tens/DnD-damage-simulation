@@ -4,6 +4,7 @@ import type { CombatantDefinition, CombatantInput, HandState, TargetSnapshot, We
 import type { HpChangeEvent } from "./DamageTypes.ts";
 import { applyDamage, initializeHitPoints } from "./HitPointsResolver.ts";
 import type { DeathSaveState, LifeState, ZeroHpBehavior } from "./HitPointTypes.ts";
+import { freezeSnapshot } from "./Strategy.ts";
 
 export type EffectExpiry = { boundary: "start" | "end"; combatantId: string; turnOccurrence: number };
 
@@ -272,7 +273,7 @@ export class EncounterState {
 	}
 	effectsOn(id: string): readonly Readonly<TimedEffect>[] {
 		this.definition(id);
-		return this.effects.filter((effect) => effect.targetId === id).map((effect) => Object.freeze({ ...effect }));
+		return freezeSnapshot(structuredClone(this.effects.filter((effect) => effect.targetId === id)));
 	}
 	effectiveSpeed(id: string): number {
 		const conditions = this.state(id).conditions;

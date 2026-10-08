@@ -32,7 +32,7 @@ import { grantTemporaryHp, heal, resolveDeathSave, stabilize } from "./HitPoints
 import { resolveSavingThrow } from "./SavingThrowResolver.ts";
 import type { SavingThrowRequest } from "./SavingThrowTypes.ts";
 import { type CombatStrategy, defaultStrategy, freezeSnapshot } from "./Strategy.ts";
-import { prepareWeaponAttack, validateMasterySelections } from "./WeaponCombat.ts";
+import { prepareWeaponAttack, selectWeaponInstance, validateMasterySelections } from "./WeaponCombat.ts";
 import {
 	hasWeaponMastery,
 	masteryAttackModifiers,
@@ -440,6 +440,7 @@ export class CombatEngine {
 	private prepared(request: AttackRequest): PreparedWeaponAttack | undefined {
 		if (!request.weapon && !request.weaponInstanceId) return undefined;
 		if (request.weapon) this.validateWeapon(request.weapon);
+		this.validateWeapon(selectWeaponInstance(this.encounter, request).weapon);
 		const prepared = prepareWeaponAttack(this.encounter, request);
 		this.validateComponents(prepared.damageComponents);
 		if (!Number.isFinite(prepared.attackBonus)) throw new Error("Invalid weapon attack bonus");
@@ -452,7 +453,12 @@ export class CombatEngine {
 		this.encounter.definition(input.targetId);
 		try {
 			const request = this.normalized(input);
-			if (request.actorId === request.targetId || !["melee", "ranged", "thrown"].includes(request.mode)) return false;
+			if (
+				request.actorId === request.targetId ||
+				this.encounter.state(request.targetId).lifeState === "dead" ||
+				!["melee", "ranged", "thrown"].includes(request.mode)
+			)
+				return false;
 			if (request.distance !== undefined && (!Number.isFinite(request.distance) || request.distance < 0)) return false;
 			if (!request.weapon && !request.weaponInstanceId && !request.profile) return false;
 			this.prepared(request);

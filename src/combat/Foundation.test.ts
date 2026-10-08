@@ -50,6 +50,8 @@ function fixture(
 		class?: BaseClass;
 		level?: number;
 		hp?: number;
+		initialHp?: number;
+		zeroHpBehavior?: "die" | "death-saves";
 		ac?: number;
 		classState?: Record<string, number | boolean | string>;
 		strategy?: ConstructorParameters<typeof CombatEngine>[1]["strategy"];
@@ -58,7 +60,12 @@ function fixture(
 	const hero = character(options.class, options.level);
 	const encounter = new EncounterState([
 		{ id: "hero", definition: hero, initialClassState: options.classState ?? {} },
-		{ id: "enemy", definition: new BaseMonster("Target", options.ac ?? 12, options.hp ?? 50) },
+		{
+			id: "enemy",
+			definition: new BaseMonster("Target", options.ac ?? 12, options.hp ?? 50),
+			...(options.initialHp !== undefined ? { initialHitPoints: options.initialHp } : {}),
+			...(options.zeroHpBehavior ? { zeroHpBehavior: options.zeroHpBehavior } : {}),
+		},
 		{ id: "other", definition: new BaseMonster("Other", 12, 50) },
 	]);
 	const roller = new FixedDiceRoller(rolls);
@@ -229,8 +236,8 @@ test("phases run weapon choice before class dice, then critical benefit, reroll,
 	assert.deepEqual(order, ["weapon", "components", "critical", "reroll", "onHit", "afterAttack"]);
 });
 test("HP floors at zero, overkill stays damage and an already-zero target produces no new transition", () => {
-	const f = fixture([10, 8, 10, 10, 1, 1], { hp: 5 });
-	const first = f.engine.resolveSingleAttack(f.request);
+	const f = fixture([10, 8, 10, 10, 1, 1], { hp: 50, initialHp: 5, zeroHpBehavior: "death-saves" });
+	const first = f.engine.resolveSingleAttack({ ...f.request, distance: 5 });
 	assert.deepEqual(first.damage?.hp, {
 		targetId: "enemy",
 		previousHp: 5,
@@ -243,13 +250,14 @@ test("HP floors at zero, overkill stays damage and an already-zero target produc
 		temporaryHpLost: 0,
 		overflow: 6,
 		previousLifeState: "alive",
-		currentLifeState: "dead",
+		currentLifeState: "dying",
 		previousDeathSaves: { successes: 0, failures: 0 },
 		currentDeathSaves: { successes: 0, failures: 0 },
 	});
-	const second = f.engine.resolveSingleAttack(f.request);
+	const second = f.engine.resolveSingleAttack({ ...f.request, distance: 5 });
 	assert.equal(second.damage?.hp.reducedToZero, false);
 	assert.equal(second.damage?.hp.hpLost, 0);
+	assert.equal(second.damage?.hp.currentDeathSaves.failures, 2);
 	assert.equal(f.hero.hitPoints, 50);
 });
 test("once-per-turn state spans separate calls and reactions; only explicit beginTurn resets it", () => {
