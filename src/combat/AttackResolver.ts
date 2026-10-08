@@ -1634,10 +1634,7 @@ export class CombatEngine {
 				)
 					continue;
 				for (const targetId of targets) {
-					const mode =
-						instance.weapon.name === preferred?.name
-							? (options.mode ?? instance.weapon.category)
-							: instance.weapon.category;
+					const mode = options.mode ?? instance.weapon.category;
 					const selection: AttackSelection = {
 						targetId,
 						weaponInstanceId: instance.id,
