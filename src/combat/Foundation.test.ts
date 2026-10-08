@@ -561,3 +561,120 @@ test("Brutal Strike dice use encounter RNG and keep all critical copies", () => 
 	);
 	assert.equal(f.roller.remaining, 0);
 });
+
+test("encounters detach the whole weapon/class graph from the build and each other", () => {
+	const originalWeapon = new Weapon(
+		"Isolated weapon",
+		"",
+		"martial",
+		"common",
+		0,
+		0,
+		"medium",
+		[new Dice(6)],
+		"slashing",
+		undefined,
+		{ category: "melee", properties: ["heavy", "two-handed"], range: { normal: 20, long: 60 } },
+	);
+	const original = new BaseCharacter(
+		4,
+		new BaseClass([originalWeapon]),
+		originalWeapon,
+		"strength",
+		{
+			strength: 10,
+			dexterity: 10,
+			constitution: 10,
+			intelligence: 10,
+			wisdom: 10,
+			charisma: 10,
+		},
+		16,
+		50,
+	);
+	const create = () =>
+		new EncounterState([
+			{ id: "hero", definition: original },
+			{ id: "target", definition: new BaseMonster("Target", 10, 50) },
+		]);
+	const first = create();
+	const second = create();
+	const a = first.definition("hero");
+	const b = second.definition("hero");
+	assert.ok(a instanceof BaseCharacter);
+	assert.ok(b instanceof BaseCharacter);
+	assert.notEqual(a.weapon, original.weapon);
+	assert.notEqual(a.weapon, b.weapon);
+	assert.notEqual(a.weapon.damage[0], b.weapon.damage[0]);
+	assert.notEqual(a.weapon.properties, b.weapon.properties);
+	assert.notEqual(a.weapon.properties, original.weapon.properties);
+	assert.notEqual(a.weapon.range, b.weapon.range);
+	assert.equal(Object.isFrozen(a.weapon.properties), true);
+	assert.equal(Object.isFrozen(a.weapon.range), true);
+	assert.throws(() => Reflect.apply(Array.prototype.push, a.weapon.properties, ["light"]), TypeError);
+	assert.notEqual(a.characterClass, b.characterClass);
+	assert.notEqual(a.characterClass.weaponProficiencies, b.characterClass.weaponProficiencies);
+	// Keep identity *inside* a single detached graph, so proficiency still works.
+	assert.equal(a.characterClass.weaponProficiencies[0], a.weapon);
+	a.weapon.damage.push(new Dice(6));
+	a.weapon.damageType = "fire";
+	const firstDie = a.weapon.damage[0];
+	assert.ok(firstDie);
+	Object.defineProperty(firstDie, "maxValue", { value: 12 });
+	Object.defineProperty(a.weapon, "category", { value: "ranged" });
+	const aProficiency = a.characterClass.weaponProficiencies[0];
+	assert.ok(aProficiency);
+	aProficiency.name = "Changed first encounter";
+	Reflect.apply(Array.prototype.push, a.characterClass.weaponProficiencies, [weapon]);
+	assert.equal(a.characterClass.weaponProficiencies.length, 2);
+	assert.equal(original.characterClass.weaponProficiencies.length, 1);
+	assert.equal(b.characterClass.weaponProficiencies.length, 1);
+	assert.equal(original.weapon.damage[0]?.maxValue, 6);
+	assert.equal(original.weapon.damage.length, 1);
+	assert.equal(original.weapon.damageType, "slashing");
+	assert.equal(original.weapon.name, "Isolated weapon");
+	assert.equal(b.weapon.damage[0]?.maxValue, 6);
+	assert.equal(b.weapon.category, "melee");
+	assert.deepEqual(b.weapon.properties, ["heavy", "two-handed"]);
+	assert.equal(b.weapon.damage.length, 1);
+	assert.equal(b.weapon.damageType, "slashing");
+	assert.equal(b.weapon.name, "Isolated weapon");
+	// Original definition changes after construction must not leak into either encounter.
+	original.weapon.damage.push(new Dice(8));
+	original.weapon.damageType = "cold";
+	Object.defineProperty(original.weapon, "reach", { value: 15 });
+	const originalDie = original.weapon.damage[0];
+	assert.ok(originalDie);
+	Object.defineProperty(originalDie, "maxValue", { value: 20 });
+	const originalProficiency = original.characterClass.weaponProficiencies[0];
+	assert.ok(originalProficiency);
+	originalProficiency.name = "Changed original build";
+	Reflect.apply(Array.prototype.push, original.characterClass.weaponProficiencies, [weapon]);
+	assert.equal(original.characterClass.weaponProficiencies.length, 2);
+	assert.equal(a.characterClass.weaponProficiencies.length, 2);
+	assert.equal(b.characterClass.weaponProficiencies.length, 1);
+	assert.equal(a.weapon.damage.length, 2);
+	assert.equal(a.weapon.damageType, "fire");
+	assert.equal(a.weapon.name, "Changed first encounter");
+	assert.equal(b.weapon.damage[0]?.maxValue, 6);
+	assert.equal(b.weapon.category, "melee");
+	assert.deepEqual(b.weapon.properties, ["heavy", "two-handed"]);
+	assert.equal(b.weapon.damage.length, 1);
+	assert.equal(b.weapon.damageType, "slashing");
+	assert.equal(b.weapon.reach, 5);
+	assert.equal(b.characterClass.isProficientWithWeapon(b.weapon), true);
+	second.beginTurn("hero");
+	const roller = new FixedDiceRoller([
+		{ sides: 20, value: 10 },
+		{ sides: 6, value: 3 },
+	]);
+	const result = new CombatEngine(second, { roller }).resolveSingleAttack({
+		actorId: "hero",
+		targetId: "target",
+		mode: "melee",
+		actionSource: "attack-action",
+	});
+	assert.deepEqual(result.damage?.byType, { slashing: 3 });
+	assert.equal(result.hit.totalAttackRoll, 12);
+	assert.equal(roller.remaining, 0);
+});

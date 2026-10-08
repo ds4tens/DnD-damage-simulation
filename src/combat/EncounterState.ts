@@ -1,4 +1,3 @@
-import BaseCharacter from "../character/BaseCharacter.ts";
 import type { TConditionState } from "../modifiers/Conditions.ts";
 import type { CombatantDefinition, CombatantInput, TargetSnapshot } from "./CombatTypes.ts";
 import type { HpChangeEvent } from "./DamageTypes.ts";
@@ -38,12 +37,10 @@ export class EncounterState {
 				throw new Error(`Duplicate or empty combatant ID: ${participant.id}`);
 			const original = participant.definition;
 			if (!Number.isFinite(original.hitPoints) || original.hitPoints < 0) throw new Error("Invalid starting HP");
-			// Preserve passive class methods, but detach all mutable participant/build data.
-			const definition = Object.assign(Object.create(Object.getPrototypeOf(original)), original) as CombatantDefinition;
-			definition.conditions = structuredClone(original.conditions);
-			if (original instanceof BaseCharacter && definition instanceof BaseCharacter) {
-				definition.stats = { ...original.stats };
-			}
+			// Clone the complete supported definition graph: weapon dice, metadata and
+			// class proficiency weapons must not alias the build or another encounter.
+			// Preserve prototypes without rerunning constructors (and applying ASI again).
+			const definition = cloneDefinition(original);
 			this.definitions.set(participant.id, definition);
 			this.states.set(participant.id, {
 				hitPoints: original.hitPoints,
@@ -160,4 +157,32 @@ export class EncounterState {
 			reducedToZero: previousHp > 0 && state.hitPoints === 0,
 		};
 	}
+}
+
+/** Passive methods stay on their prototypes; every nested data object is detached. */
+function cloneDefinition<T>(value: T, seen: WeakMap<object, unknown> = new WeakMap()): T {
+	if (value === null || typeof value !== "object") return value;
+	if (seen.has(value)) return seen.get(value) as T;
+	if (value instanceof Map) {
+		const copy = new Map();
+		seen.set(value, copy);
+		for (const [key, entry] of value) copy.set(cloneDefinition(key, seen), cloneDefinition(entry, seen));
+		return copy as T;
+	}
+	if (value instanceof Set) {
+		const copy = new Set();
+		seen.set(value, copy);
+		for (const entry of value) copy.add(cloneDefinition(entry, seen));
+		return copy as T;
+	}
+	const copy = Array.isArray(value) ? [] : Object.create(Object.getPrototypeOf(value));
+	seen.set(value, copy);
+	for (const key of Reflect.ownKeys(value)) {
+		const descriptor = Object.getOwnPropertyDescriptor(value, key);
+		if (!descriptor) continue;
+		if ("value" in descriptor) descriptor.value = cloneDefinition(descriptor.value, seen);
+		Object.defineProperty(copy, key, descriptor);
+	}
+	if (Object.isFrozen(value)) Object.freeze(copy);
+	return copy as T;
 }
