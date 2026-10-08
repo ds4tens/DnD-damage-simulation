@@ -1,8 +1,12 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { CombatEngine } from "../combat/AttackResolver.ts";
+import { EncounterState } from "../combat/EncounterState.ts";
+import { FixedDiceRoller } from "../dice/RandomSource.ts";
 import { featMetadata } from "../feats/FeatTypes.ts";
 import { armorCatalog, deriveArmorClass, deriveBarbarianHitPoints } from "../Items/Armor.ts";
 import { Club } from "../Items/Weapon/WeaponList.ts";
+import BaseMonster from "../monster/BaseMonster.ts";
 import {
 	assertLegalCharacterBuild,
 	assessBuildSupport,
@@ -11,40 +15,9 @@ import {
 	combatantInputForBuild,
 	validatePointBuy,
 } from "./CharacterBuild.ts";
+import { sampleSelection } from "./CharacterBuildTestFixtures.ts";
 import { backgroundMetadata, speciesMetadata } from "./Origins.ts";
 
-export function sampleSelection(level = 1): CharacterBuildSelection {
-	return {
-		ruleset: "phb-2024",
-		className: "barbarian",
-		level,
-		...(level >= 3 ? { subclass: "berserker" as const } : {}),
-		pointBuy: { strength: 15, dexterity: 14, constitution: 14, intelligence: 8, wisdom: 12, charisma: 8 },
-		background: {
-			id: "soldier",
-			abilityScoreIncreases: [
-				{ abilityScore: "strength", amount: 2 },
-				{ abilityScore: "constitution", amount: 1 },
-			],
-			toolChoice: "dice-set",
-		},
-		species: { id: "dwarf" },
-		classSkills: ["nature", "survival"],
-		progression: [4, 8, 12, 16, 19]
-			.filter((l) => l <= level)
-			.map((l) => ({
-				level: l as 4 | 8 | 12 | 16 | 19,
-				feat: { name: "ability-score-improvement", abilityScoreImprovement: [{ abilityScore: "strength", amount: 2 }] },
-			})),
-		equipment: {
-			armorId: "none",
-			shield: false,
-			weapons: [{ id: "staff", weaponId: "quarterstaff" }],
-			hands: { left: "staff", right: null },
-		},
-		masteredWeaponIds: ["quarterstaff"],
-	};
-}
 test("complete factual PHB2024 catalogs retain source pages and separate benefit statuses", () => {
 	assert.equal(Object.keys(featMetadata).length, 75);
 	assert.equal(Object.keys(backgroundMetadata).length, 16);
@@ -211,11 +184,11 @@ test("armor AC, shield hands, heavy negative Dex and fixed HP are derived from f
 	assert.equal(shield.character.armorClass, 19);
 	assert.equal(shield.character.hitPoints, 15);
 	assert.throws(() => buildLegalCharacter({ ...s, equipment: { ...s.equipment, shield: true } }), /occupy/);
-	assert.throws(
-		() =>
-			buildLegalCharacter({ ...s, equipment: { ...s.equipment, weapons: [{ id: "staff", weaponId: "greatsword" }] } }),
-		/both hands/,
-	);
+	const held = buildLegalCharacter({
+		...s,
+		equipment: { ...s.equipment, weapons: [{ id: "staff", weaponId: "greatsword" }] },
+	});
+	assert.deepEqual(held.combatDefaults.initialHands, { left: "staff", right: null });
 	assert.equal(deriveArmorClass({ ...s.pointBuy, dexterity: 8 }, "plate", false), 18);
 	assert.equal(deriveBarbarianHitPoints({ ...s.pointBuy, constitution: 18 }, 5, { tough: true }), 16 + 4 * 11 + 10);
 });
@@ -236,6 +209,7 @@ test("acquired armor training, Resilient save grant, feat mastery and support ga
 		equipment: { ...s.equipment, armorId: "plate" },
 	});
 	assert.equal(build.character.armorCategory, "heavy");
+	assert.equal(build.character.armorTrained, true);
 	assert.equal(build.character.armorClass, 18);
 	const charger = buildLegalCharacter({
 		...sampleSelection(4),
@@ -247,4 +221,134 @@ test("acquired armor training, Resilient save grant, feat mastery and support ga
 	assert.ok(charger.report.limitations.some((b) => b.id === "charger.charge-attack"));
 	assert.throws(() => assessBuildSupport(charger, { requestedBenefits: ["charger.charge-attack"] }), /Unsupported/);
 	assert.throws(() => assessBuildSupport(charger, { lighting: "darkness" }), /vision/);
+});
+test("factory allows untrained armor and actual combat applies Initiative cancellation and attack Disadvantage", () => {
+	const s = sampleSelection(7);
+	const build = buildLegalCharacter({ ...s, equipment: { ...s.equipment, armorId: "plate" } });
+	assert.equal(build.character.armorTrained, false);
+	assert.equal(build.character.armorClass, 18);
+	const encounter = new EncounterState([
+		combatantInputForBuild(build, "hero"),
+		{ id: "target", definition: new BaseMonster("Target", 12, 1000), hitPointMode: "inexhaustible" },
+	]);
+	const roller = new FixedDiceRoller([12, 5, 18, 2, 18, 2]);
+	const engine = new CombatEngine(encounter, {
+		roller,
+		distanceFor: () => 5,
+		strategy: { useOptionalFeature: () => false, useFeature: () => false },
+	});
+	const scheduler = engine.createScheduler();
+	assert.deepEqual(scheduler.initiative.find((entry) => entry.actorId === "hero")?.d20Rolls, [12]);
+	scheduler.beginNextTurn();
+	const action = engine.resolveAttackAction("hero", "target");
+	assert.deepEqual(
+		action.attacks.map((attack) => attack.hit.d20Rolls),
+		[
+			[18, 2],
+			[18, 2],
+		],
+	);
+	assert.equal(action.totalDamage, 0);
+	assert.equal(roller.remaining, 0);
+});
+test("Primal Knowledge is earned at3, grants a new skill after Origin and is available to later expertise", () => {
+	const s = sampleSelection(4);
+	const { primalKnowledgeSkill: existingChoice, ...withoutChoice } = s;
+	assert.equal(existingChoice, "perception");
+	assert.throws(() => buildLegalCharacter(withoutChoice), /Primal Knowledge/);
+	assert.throws(
+		() => buildLegalCharacter({ ...sampleSelection(), primalKnowledgeSkill: "perception" }),
+		/before level3/,
+	);
+	assert.throws(() => buildLegalCharacter({ ...s, primalKnowledgeSkill: "nature" }), /additional/);
+	const build = buildLegalCharacter({
+		...s,
+		progression: [
+			{
+				level: 4,
+				feat: {
+					name: "skill-expert",
+					abilityScoreImprovement: [{ abilityScore: "strength", amount: 1 }],
+					choices: { skills: ["medicine"], expertise: "perception" },
+				},
+			},
+		],
+	});
+	assert.equal(build.character.buildData?.skills.includes("perception"), true);
+	assert.equal(build.character.buildData?.expertise.includes("perception"), true);
+	assert.equal(build.character.medicineProficient, true);
+});
+test("Keen Mind and Observant grant chosen proficiency or Expertise using the actual skill list", () => {
+	const s = sampleSelection(4);
+	const keen = buildLegalCharacter({
+		...s,
+		pointBuy: { strength: 15, dexterity: 12, constitution: 14, intelligence: 13, wisdom: 8, charisma: 8 },
+		progression: [
+			{
+				level: 4,
+				feat: {
+					name: "keen-mind",
+					abilityScoreImprovement: [{ abilityScore: "intelligence", amount: 1 }],
+					choices: { skills: ["nature"] },
+				},
+			},
+		],
+	});
+	assert.equal(keen.character.buildData?.expertise.includes("nature"), true);
+	assert.throws(
+		() =>
+			buildLegalCharacter({
+				...s,
+				pointBuy: { strength: 15, dexterity: 12, constitution: 14, intelligence: 13, wisdom: 8, charisma: 8 },
+				progression: [
+					{
+						level: 4,
+						feat: {
+							name: "keen-mind",
+							abilityScoreImprovement: [{ abilityScore: "intelligence", amount: 1 }],
+							choices: { skills: ["perception"] },
+						},
+					},
+				],
+			}),
+		/choices/,
+	);
+	const observer = buildLegalCharacter({
+		...s,
+		pointBuy: { ...s.pointBuy, wisdom: 13, dexterity: 12 },
+		progression: [
+			{
+				level: 4,
+				feat: {
+					name: "observant",
+					abilityScoreImprovement: [{ abilityScore: "wisdom", amount: 1 }],
+					choices: { skills: ["insight"] },
+				},
+			},
+		],
+	});
+	assert.equal(observer.character.buildData?.skills.includes("insight"), true);
+	assert.equal(observer.character.buildData?.expertise.includes("insight"), false);
+});
+test("species and Epic Boon resistance choices apply to the cloned character definition", () => {
+	const aasimar = buildLegalCharacter({ ...sampleSelection(), species: { id: "aasimar" } });
+	assert.deepEqual(aasimar.character.defenses.resistances, ["necrotic", "radiant"]);
+	const s = sampleSelection(19);
+	const build = buildLegalCharacter({
+		...s,
+		progression: [
+			...s.progression.filter((p) => p.level !== 19),
+			{
+				level: 19,
+				feat: {
+					name: "boon-of-energy-resistance",
+					abilityScoreImprovement: [{ abilityScore: "constitution", amount: 1 }],
+					choices: { damageTypes: ["cold", "radiant"] },
+				},
+			},
+		],
+	});
+	assert.deepEqual(build.character.defenses.resistances, ["poison", "cold", "radiant"]);
+	const malformed = JSON.parse(JSON.stringify({ ...sampleSelection(), species: { id: "gnome", lineage: "rock" } }));
+	assert.throws(() => buildLegalCharacter(malformed), /spellcasting ability/);
 });

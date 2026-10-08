@@ -331,20 +331,27 @@ test("Hew refusal closes the immediate window; new independent trigger can offer
 test("Hew excludes off-turn, spent Bonus Action, noncritical zero-HP target and close Ranged weapon", () => {
 	for (const variant of ["off-turn", "spent", "zero", "ranged"] as const) {
 		let offers = 0;
-		const { encounter, engine, request } = fixture(variant === "zero" ? [d20(10), d10(1)] : [d20(20), d10(1), d10(1)], {
-			hp: 100,
-			weapon: makeWeapon({
-				category: variant === "ranged" ? "ranged" : "melee",
-				...(variant === "zero" ? { reach: 10 } : {}),
-				...(variant === "ranged" ? { range: { normal: 80, long: 320 } } : {}),
-			}),
-			strategy: {
-				chooseHewTarget: () => {
-					offers++;
-					return null;
+		const { encounter, engine, request } = fixture(
+			variant === "zero"
+				? [d20(10), d10(1)]
+				: variant === "ranged"
+					? [d20(20), d20(20), d10(1), d10(1)]
+					: [d20(20), d10(1), d10(1)],
+			{
+				hp: 100,
+				weapon: makeWeapon({
+					category: variant === "ranged" ? "ranged" : "melee",
+					...(variant === "zero" ? { reach: 10 } : {}),
+					...(variant === "ranged" ? { range: { normal: 80, long: 320 } } : {}),
+				}),
+				strategy: {
+					chooseHewTarget: () => {
+						offers++;
+						return null;
+					},
 				},
 			},
-		});
+		);
 		if (variant === "off-turn") {
 			engine.endTurn();
 			engine.beginTurn("enemy");

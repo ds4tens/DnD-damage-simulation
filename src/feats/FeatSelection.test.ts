@@ -187,6 +187,20 @@ test("local validation rejects invalid levels and stat values", () => {
 		assert.throws(() => resolve([], { strength }), /Invalid ability score/);
 });
 
+test("named Spellcasting prerequisite does not accept Pact Magic or merely casting spells", () => {
+	const feat = half("boon-of-spell-recall", "intelligence");
+	assert.deepEqual(featMetadata[feat.name].requiredFeaturesAnyOf, ["Spellcasting"]);
+	for (const features of [[], ["Pact Magic"]] as const)
+		assert.throws(
+			() => resolveFeatSelections({ level: 19, stats, feats: [feat], context: { features } }),
+			/Required named feature missing/,
+		);
+	assert.equal(
+		resolveFeatSelections({ level: 19, stats, feats: [feat], context: { features: ["Spellcasting"] } }).feats.length,
+		1,
+	);
+});
+
 test("frozen inputs remain unchanged after successful and rejected multi-feat selections", () => {
 	const choice = Object.freeze(increase("strength", 2));
 	const selection = Object.freeze({

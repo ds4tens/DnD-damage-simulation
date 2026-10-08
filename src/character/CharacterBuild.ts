@@ -4,6 +4,7 @@ import WildHeart from "../classes/BarbarianSubclasses/WildHeart.ts";
 import WorldTree from "../classes/BarbarianSubclasses/WorldTree.ts";
 import Zealot from "../classes/BarbarianSubclasses/Zealot.ts";
 import type { CombatantInput } from "../combat/CombatTypes.ts";
+import type { DamageType } from "../combat/DamageTypes.ts";
 import { resolveFeatSelections } from "../feats/FeatSelection.ts";
 import { abilityScores, type FeatSelection, getFeatMetadata } from "../feats/FeatTypes.ts";
 import { spellChoiceIndex } from "../feats/SpellChoiceIndex.ts";
@@ -11,10 +12,11 @@ import { armorCatalog, deriveArmorClass, deriveBarbarianHitPoints } from "../Ite
 import { Club, type WeaponCatalogId, weaponCatalog, weaponTypes2024 } from "../Items/Weapon/WeaponList.ts";
 import BaseCharacter, { type TStatBlock } from "./BaseCharacter.ts";
 import type { CharacterBuildSelection, LegalCharacterBuild } from "./CharacterBuildTypes.ts";
-import { assessBenefitSupport, type DprSupportContext } from "./FeatureSupport.ts";
+import { assessBenefitSupport, type DprSupportContext, summarizeBenefitSupport } from "./FeatureSupport.ts";
 import {
 	artisanToolIds,
 	backgroundMetadata,
+	dragonDamageTypes,
 	gamingSetIds,
 	musicalInstrumentIds,
 	selectedSpeciesBenefits,
@@ -111,18 +113,8 @@ function validateEquipment(selection: CharacterBuildSelection, armorTraining: re
 		)
 			throw new Error("The same instance cannot occupy two hands with this weapon");
 	}
-	for (const value of new Set(Object.values(hands))) {
-		const held = gear.weapons.find((w) => w.id === value);
-		if (
-			held &&
-			weaponTypes2024[held.weaponId].properties.includes("two-handed") &&
-			(hands.left !== value || hands.right !== value)
-		)
-			throw new Error("A Two-Handed weapon must use both hands");
-	}
-	const armor = armorCatalog[gear.armorId];
-	if (armor.category !== "none" && !armorTraining.includes(armor.category))
-		throw new Error("Equipment requires armor training for legal DPR builds");
+	// Two-Handed governs attacking, not merely holding the weapon (PHB2024 p213).
+	// Armor training changes D20 penalties, not whether a creature may wear armor.
 	if (gear.shield && !armorTraining.includes("shield")) throw new Error("Shield requires armor training");
 }
 function validateStock(selection: CharacterBuildSelection): void {
@@ -191,6 +183,15 @@ export function buildLegalCharacter(raw: CharacterBuildSelection): LegalCharacte
 		)
 			throw new Error("Invalid High Elf cantrip");
 	}
+	if (selection.level < 3 && selection.primalKnowledgeSkill !== undefined)
+		throw new Error("Primal Knowledge is not available before level3");
+	if (
+		selection.level >= 3 &&
+		(!selection.primalKnowledgeSkill ||
+			!classSkills.includes(selection.primalKnowledgeSkill) ||
+			skills.includes(selection.primalKnowledgeSkill))
+	)
+		throw new Error("Primal Knowledge requires an additional Barbarian skill choice");
 	let tool = bg.tool;
 	if (tool.startsWith("any")) {
 		const allowed: readonly string[] =
@@ -237,6 +238,19 @@ export function buildLegalCharacter(raw: CharacterBuildSelection): LegalCharacte
 		skills,
 		tools: [tool],
 	};
+	if (selection.level >= 3) {
+		const originOnly = feats.filter((feat) => feat.acquiredAt === 1);
+		const originResolved = resolveFeatSelections({
+			level: 1,
+			stats: initialStats,
+			feats: originOnly,
+			context: baseContext,
+		});
+		const skill = selection.primalKnowledgeSkill;
+		if (!skill || originResolved.skills.includes(skill))
+			throw new Error("Primal Knowledge must grant an additional skill after Origin feats");
+		skills.push(skill);
+	}
 	const resolved = resolveFeatSelections({ level: selection.level, stats: initialStats, feats, context: baseContext });
 	validateEquipment(selection, resolved.armorTraining);
 	const constructors = { berserker: Berserker, "wild-heart": WildHeart, "world-tree": WorldTree, zealot: Zealot };
@@ -275,6 +289,17 @@ export function buildLegalCharacter(raw: CharacterBuildSelection): LegalCharacte
 	});
 	const weapon = selection.equipment.weapons[0] ? weaponTypes2024[selection.equipment.weapons[0].weaponId] : Club;
 	const armor = armorCatalog[selection.equipment.armorId];
+	const resistances: DamageType[] = [];
+	if (selection.species.id === "aasimar") resistances.push("necrotic", "radiant");
+	if (selection.species.id === "dwarf") resistances.push("poison");
+	if (selection.species.id === "dragonborn") resistances.push(dragonDamageTypes[selection.species.ancestry]);
+	if (selection.species.id === "tiefling")
+		resistances.push(
+			selection.species.legacy === "abyssal" ? "poison" : selection.species.legacy === "chthonic" ? "necrotic" : "fire",
+		);
+	for (const feat of resolved.feats)
+		if (feat.name === "boon-of-energy-resistance")
+			resistances.push(...((feat.choices?.damageTypes ?? []) as DamageType[]));
 	const character = new BaseCharacter(
 		selection.level,
 		characterClass,
@@ -285,8 +310,9 @@ export function buildLegalCharacter(raw: CharacterBuildSelection): LegalCharacte
 		hitPoints,
 		feats,
 		{
+			defenses: { resistances: [...new Set(resistances)] },
 			armorCategory: armor.category,
-			armorTrained: true,
+			armorTrained: armor.category === "none" || resolved.armorTraining.includes(armor.category),
 			shieldEquipped: shield,
 			medicineProficient: resolved.skills.includes("medicine"),
 			featValidationContext: baseContext,
@@ -308,12 +334,14 @@ export function buildLegalCharacter(raw: CharacterBuildSelection): LegalCharacte
 		speciesMetadata[selection.species.id].speed +
 		(selection.level >= 5 && armor.category !== "heavy" ? 10 : 0) +
 		(selection.species.id === "elf" && selection.species.lineage === "wood" ? 5 : 0) -
-		(finalStats.strength < armor.strengthRequirement ? 10 : 0);
+		(finalStats.strength < armor.strengthRequirement ? 10 : 0) +
+		(selectedNames.includes("speedy") ? 10 : 0) +
+		(selectedNames.includes("boon-of-speed") ? 30 : 0);
 	const benefits = [
 		...resolved.feats.flatMap((feat) => getFeatMetadata(feat.name).benefits),
-		...selectedSpeciesBenefits(selection.species),
+		...selectedSpeciesBenefits(selection.species, selection.level),
 	];
-	const report = assessBenefitSupport(benefits);
+	const report = summarizeBenefitSupport(benefits);
 	const combatDefaults: Omit<CombatantInput, "id" | "definition"> = {
 		weapons: selection.equipment.weapons.map((instance) => ({
 			id: instance.id,
@@ -354,7 +382,7 @@ export function assessBuildSupport(
 	return assessBenefitSupport(
 		[
 			...build.character.feats.flatMap((feat) => getFeatMetadata(feat.name).benefits),
-			...selectedSpeciesBenefits(build.selection.species),
+			...selectedSpeciesBenefits(build.selection.species, build.selection.level),
 		],
 		context,
 	);

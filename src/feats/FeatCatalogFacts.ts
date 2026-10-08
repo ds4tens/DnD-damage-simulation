@@ -255,7 +255,7 @@ export const featCatalogFacts = [
 		abilityPoints: 1,
 		cap: 30,
 		abilityPrerequisites: [],
-		requiredFeature: "spellcasting-or-pact-magic",
+		requiredFeature: "spellcasting",
 		armorPrerequisite: null,
 		benefits: ["free-casting"],
 	},

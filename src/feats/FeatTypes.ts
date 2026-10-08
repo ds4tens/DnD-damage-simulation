@@ -76,7 +76,7 @@ const supportedBenefits: Record<string, readonly string[]> = {
 	"shield-master": ["shield-bash"],
 	"weapon-master": ["mastery-property"],
 	"crossbow-expert": ["ignore-loading", "firing-in-melee", "dual-wielding"],
-	sharpshooter: ["bypass-cover", "firing-in-melee", "long-shots"],
+	sharpshooter: ["firing-in-melee", "long-shots"],
 	poisoner: ["potent-poison", "brew-poison"],
 	"boon-of-combat-prowess": ["peerless-aim"],
 	"boon-of-fate": ["improve-fate"],
@@ -89,8 +89,21 @@ const supportedBenefits: Record<string, readonly string[]> = {
 	resilient: ["saving-throw-proficiency"],
 	tough: ["hit-point-maximum"],
 	"boon-of-fortitude": ["fortified-health"],
+	"boon-of-energy-resistance": ["energy-resistances"],
+	"boon-of-skill": ["all-around-adept", "expertise"],
+	"keen-mind": ["lore-knowledge"],
+	observant: ["keen-observer"],
+	"skill-expert": ["skill-proficiency", "expertise"],
+	skilled: ["skill-tool-proficiency"],
+	crafter: ["tool-proficiency"],
+	musician: ["instrument-training"],
+	chef: ["cook-s-utensils"],
+	alert: ["initiative-proficiency"],
+	speedy: ["speed-increase"],
+	"boon-of-speed": ["quickness"],
 };
 const benefitDomains: Record<string, BenefitMetadata["domain"]> = {
+	"bypass-cover": "cover",
 	"charge-attack": "movement",
 	"improved-dash": "movement",
 	push: "movement",
@@ -118,7 +131,49 @@ const benefitDomains: Record<string, BenefitMetadata["domain"]> = {
 	"minor-telekinesis": "spells",
 	"detect-thoughts": "spells",
 	"encouraging-song": "allies",
+	"initiative-swap": "allies",
+	"telekinetic-shove": "movement",
+	"mounted-strike": "movement",
+	"leap-aside": "defense",
+	veer: "defense",
+	"damage-reduction": "defense",
+	"guarded-mind": "defense",
+	"concentration-breaker": "spells",
+	"last-stand": "defense",
+	"recover-vitality": "defense",
+	"shadowy-form": "defense",
 };
+const offensiveBenefits = new Set([
+	"savage-attacker.weapon-damage",
+	"piercer.puncture",
+	"piercer.enhanced-critical",
+	"slasher.hamstring",
+	"great-weapon-master.heavy-weapon-mastery",
+	"great-weapon-master.hew",
+	"lucky.luck-points",
+	"lucky.advantage",
+	"tavern-brawler.enhanced-unarmed-strike",
+	"tavern-brawler.damage-rerolls",
+	"crusher.enhanced-critical",
+	"dual-wielder.enhanced-dual-wielding",
+	"dual-wielder.quick-draw",
+	"polearm-master.pole-strike",
+	"grappler.punch-and-grab",
+	"grappler.attack-advantage",
+	"shield-master.shield-bash",
+	"weapon-master.mastery-property",
+	"crossbow-expert.ignore-loading",
+	"crossbow-expert.firing-in-melee",
+	"crossbow-expert.dual-wielding",
+	"sharpshooter.firing-in-melee",
+	"sharpshooter.long-shots",
+	"poisoner.potent-poison",
+	"poisoner.brew-poison",
+	"boon-of-combat-prowess.peerless-aim",
+	"boon-of-fate.improve-fate",
+	"boon-of-irresistible-offense.overcome-defenses",
+	"boon-of-irresistible-offense.overwhelming-strike",
+]);
 export const featMetadata: Readonly<Record<FeatName, FeatMetadata>> = Object.freeze(
 	Object.fromEntries(
 		featCatalogFacts.map((fact): [FeatName, FeatMetadata] => {
@@ -127,26 +182,48 @@ export const featMetadata: Readonly<Record<FeatName, FeatMetadata>> = Object.fre
 				? fact.benefits
 				: fact.id === "savage-attacker"
 					? ["weapon-damage"]
-					: fact.id === "tough"
-						? ["hit-point-maximum"]
-						: [];
+					: fact.id === "skilled"
+						? ["skill-tool-proficiency"]
+						: fact.id === "tough"
+							? ["hit-point-maximum"]
+							: [];
 			const benefits: BenefitMetadata[] = names.map((id) =>
 				Object.freeze({
 					id: `${fact.id}.${id}`,
 					status: supported.includes(id) ? "supported" : "unsupported",
-					domain: supported.includes(id) ? "supported" : (benefitDomains[id] ?? "utility"),
+					domain: offensiveBenefits.has(`${fact.id}.${id}`)
+						? "offense"
+						: supported.includes(id)
+							? "supported"
+							: (benefitDomains[id] ?? "utility"),
 				}),
 			);
 			if (fact.abilityPoints > 0)
 				benefits.unshift(
 					Object.freeze({ id: `${fact.id}.ability-score-increase`, status: "supported", domain: "supported" }),
 				);
+			// A named printed benefit can combine applicable and excluded effects.
+			// Keep the useful rule active while explicitly exposing its other branch.
+			const extra: Partial<Record<FeatName, readonly BenefitMetadata[]>> = {
+				"shield-master": [{ id: "shield-master.shield-bash.push", status: "unsupported", domain: "movement" }],
+				poisoner: [
+					{ id: "poisoner.brew-poison.crafting", status: "unsupported", domain: "utility" },
+					{ id: "poisoner.brew-poison.poisoned-ability-checks", status: "unsupported", domain: "enemy-actions" },
+					{ id: "poisoner.brew-poison.poisoned-condition-snapshot", status: "unsupported", domain: "utility" },
+				],
+				"boon-of-fortitude": [
+					{ id: "boon-of-fortitude.fortified-health.healing", status: "unsupported", domain: "defense" },
+				],
+			};
+			benefits.push(...(extra[fact.id] ?? []).map((benefit) => Object.freeze(benefit)));
 			const requiredFeaturesAnyOf: readonly NamedFeature[] =
 				fact.requiredFeature === "spellcasting-or-pact-magic"
 					? ["Spellcasting", "Pact Magic"]
-					: fact.requiredFeature === "fighting-style"
-						? ["Fighting Style"]
-						: [];
+					: fact.requiredFeature === "spellcasting"
+						? ["Spellcasting"]
+						: fact.requiredFeature === "fighting-style"
+							? ["Fighting Style"]
+							: [];
 			return [
 				fact.id,
 				Object.freeze({

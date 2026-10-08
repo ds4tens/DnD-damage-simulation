@@ -17,7 +17,7 @@ export const savageAttackerHook: CombatHook = {
 			return pool;
 		const second = pool.map((component) => ({
 			...component,
-			dice: component.dice.map((die) => ({ ...die, value: ctx.roller.roll(die.sides) })),
+			dice: component.dice.map((die) => ({ ...die, value: ctx.damageRoller.roll(die.sides) })),
 		}));
 		const candidates = [pool, second];
 		const selected = candidates[ctx.chooseWeaponRoll(candidates)];

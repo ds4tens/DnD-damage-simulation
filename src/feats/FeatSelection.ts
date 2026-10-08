@@ -145,6 +145,16 @@ export function validateFeatChoices(
 			throw new Error("Invalid Skill Expert expertise");
 		result.expertise = canonicalChoice(raw.expertise);
 	}
+	if (selection.name === "keen-mind" || selection.name === "observant") {
+		key("skills");
+		const allowed =
+			selection.name === "keen-mind"
+				? ["arcana", "history", "investigation", "nature", "religion"]
+				: ["insight", "investigation", "perception"];
+		result.skills = distinctChoices(raw.skills, allowed, 1, selection.name);
+		const chosen = result.skills[0];
+		if (chosen && context.skills?.includes(chosen)) result.expertise = chosen;
+	}
 	if (selection.name === "boon-of-skill") {
 		key("expertise");
 		if (

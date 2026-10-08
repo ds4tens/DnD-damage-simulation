@@ -188,13 +188,19 @@ const speciesFacts = {
 		page: 188,
 		sizes: ["medium"],
 		speed: 30,
-		benefits: ["darkvision", "dwarven-resilience", "dwarven-toughness", "stonecunning"],
+		benefits: [
+			"darkvision",
+			"dwarven-resilience.resistance",
+			"dwarven-resilience.saving-throws",
+			"dwarven-toughness",
+			"stonecunning",
+		],
 	},
 	elf: {
 		page: 189,
 		sizes: ["medium"],
 		speed: 30,
-		benefits: ["darkvision", "elven-lineage", "fey-ancestry", "keen-senses", "trance"],
+		benefits: ["darkvision", "elven-lineage.spells", "elven-lineage.speed", "fey-ancestry", "keen-senses", "trance"],
 	},
 	gnome: { page: 191, sizes: ["small"], speed: 30, benefits: ["darkvision", "gnomish-cunning", "gnomish-lineage"] },
 	goliath: {
@@ -224,17 +230,20 @@ const speciesFacts = {
 		page: 197,
 		sizes: ["small", "medium"],
 		speed: 30,
-		benefits: ["darkvision", "fiendish-legacy", "otherworldly-presence"],
+		benefits: ["darkvision", "fiendish-legacy.spells", "fiendish-legacy.resistance", "otherworldly-presence"],
 	},
 } as const;
 const supported = new Set([
 	"aasimar.celestial-resistance",
 	"aasimar.celestial-revelation.damage",
 	"aasimar.celestial-revelation.inner-radiance",
-	"aasimar.celestial-revelation.necrotic-shroud",
+	"dragonborn.draconic-ancestry",
+	"dragonborn.damage-resistance",
 	"dwarf.dwarven-toughness",
-	"dwarf.dwarven-resilience",
+	"dwarf.dwarven-resilience.resistance",
 	"elf.keen-senses",
+	"elf.elven-lineage.speed",
+	"tiefling.fiendish-legacy.resistance",
 	"goliath.giant-ancestry.fire",
 	"goliath.giant-ancestry.frost",
 	"goliath.giant-ancestry.hill",
@@ -268,27 +277,31 @@ export const speciesMetadata: Readonly<Record<SpeciesId, SpeciesMetadata>> = Obj
 							status: supported.has(key) ? "supported" : "unsupported",
 							domain: supported.has(key)
 								? "supported"
-								: benefit.includes("lineage") ||
-										benefit.includes("legacy") ||
-										benefit.includes("presence") ||
-										benefit === "light-bearer"
-									? "spells"
-									: benefit === "darkvision" || benefit === "stonecunning" || benefit === "naturally-stealthy"
-										? "vision"
-										: benefit.includes("flight") ||
-												benefit.includes("wings") ||
-												benefit.includes("nimbleness") ||
-												benefit.includes("cloud")
-											? "movement"
-											: benefit.includes("endurance") ||
-													benefit.includes("resilience") ||
-													benefit.includes("cunning") ||
-													benefit === "brave" ||
-													benefit.includes("resistance")
-												? "defense"
-												: benefit.includes("storm")
-													? "enemy-actions"
-													: "utility",
+								: benefit.includes("necrotic-shroud")
+									? "enemy-actions"
+									: benefit === "breath-weapon"
+										? "nonweapon"
+										: benefit.includes("lineage") ||
+												benefit.includes("legacy") ||
+												benefit.includes("presence") ||
+												benefit === "light-bearer"
+											? "spells"
+											: benefit === "darkvision" || benefit === "stonecunning" || benefit === "naturally-stealthy"
+												? "vision"
+												: benefit.includes("flight") ||
+														benefit.includes("wings") ||
+														benefit.includes("nimbleness") ||
+														benefit.includes("cloud")
+													? "movement"
+													: benefit.includes("endurance") ||
+															benefit.includes("resilience") ||
+															benefit.includes("cunning") ||
+															benefit === "brave" ||
+															benefit.includes("resistance")
+														? "defense"
+														: benefit.includes("storm")
+															? "enemy-actions"
+															: "utility",
 						} as BenefitMetadata);
 					}),
 				),
@@ -296,12 +309,15 @@ export const speciesMetadata: Readonly<Record<SpeciesId, SpeciesMetadata>> = Obj
 		]),
 	) as Record<SpeciesId, SpeciesMetadata>,
 );
-export function selectedSpeciesBenefits(selection: SpeciesSelection): readonly BenefitMetadata[] {
+export function selectedSpeciesBenefits(selection: SpeciesSelection, level = 20): readonly BenefitMetadata[] {
 	return speciesMetadata[selection.id].benefits.filter(
 		(benefit) =>
-			selection.id !== "goliath" ||
-			!benefit.id.includes(".giant-ancestry.") ||
-			benefit.id.endsWith(`.${selection.ancestry}`),
+			!(level < 3 && benefit.id.startsWith("aasimar.celestial-revelation")) &&
+			!(level < 5 && ["goliath.large-form", "dragonborn.draconic-flight"].includes(benefit.id)) &&
+			!(selection.id === "elf" && selection.lineage !== "wood" && benefit.id === "elf.elven-lineage.speed") &&
+			(selection.id !== "goliath" ||
+				!benefit.id.includes(".giant-ancestry.") ||
+				benefit.id.endsWith(`.${selection.ancestry}`)),
 	);
 }
 export function speciesSize(selection: SpeciesSelection): SpeciesSize {
@@ -315,7 +331,10 @@ export function validateSpeciesSelection(selection: SpeciesSelection): void {
 	if (!selection || !Object.hasOwn(speciesMetadata, selection.id)) throw new Error("Unsupported species selection");
 	if (!speciesMetadata[selection.id].sizes.includes(speciesSize(selection))) throw new Error("Invalid species size");
 	const mental: readonly string[] = ["intelligence", "wisdom", "charisma"];
-	if ("spellcastingAbility" in selection && !mental.includes(selection.spellcastingAbility))
+	if (
+		(selection.id === "elf" || selection.id === "gnome" || selection.id === "tiefling") &&
+		!mental.includes(selection.spellcastingAbility)
+	)
 		throw new Error("Invalid species spellcasting ability");
 	if (selection.id === "goliath" && !["cloud", "fire", "frost", "hill", "stone", "storm"].includes(selection.ancestry))
 		throw new Error("Invalid Giant Ancestry");

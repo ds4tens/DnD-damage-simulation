@@ -29,6 +29,8 @@ export type CharacterBuildSelection = {
 	};
 	readonly species: SpeciesSelection;
 	readonly classSkills: readonly string[];
+	/** Barbarian3 Primal Knowledge grants one additional class-list skill. */
+	readonly primalKnowledgeSkill?: string;
 	readonly humanOriginFeat?: FeatSelection;
 	readonly progression: readonly ProgressionFeatChoice[];
 	readonly equipment: {
