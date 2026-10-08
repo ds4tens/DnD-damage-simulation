@@ -1,30 +1,13 @@
-import { normalDistributionInRange } from "../lib/normalDistrub.ts";
+import type { DiceRoller } from "./RandomSource.ts";
+import { validateSides } from "./RandomSource.ts";
 
+/** Immutable die description; every roll requires an explicit encounter source. */
 class Dice {
-	_minDiceValue = 1;
-	_maxValue: number;
-
-	constructor(maxValue: number) {
-		this._maxValue = maxValue;
+	constructor(readonly maxValue: number) {
+		validateSides(maxValue);
 	}
-
-	get maxValue(): number {
-		return this._maxValue;
-	}
-
-	/**
-	 * Бросок кубика с нормальным распределением
-	 * @param useNormalDistribution - использовать ли нормальное распределение (по умолчанию true)
-	 * @returns результат броска
-	 */
-	rollWithNormalDistribution(useNormalDistribution: boolean = true): number {
-		if (useNormalDistribution) {
-			return normalDistributionInRange(this._minDiceValue, this._maxValue);
-		} else {
-			// Обычный равномерный бросок
-			return Math.floor(Math.random() * (this._maxValue - this._minDiceValue + 1)) + this._minDiceValue;
-		}
+	roll(roller: DiceRoller): number {
+		return roller.roll(this.maxValue);
 	}
 }
-
 export default Dice;

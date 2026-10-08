@@ -15,12 +15,14 @@ class BaseMonster {
 	armorClass: number;
 	hitPoints: number;
 	conditions: TConditionState[];
+	speed: number;
 
-	constructor(name: string, armorClass: number, hitPoints: number) {
+	constructor(name: string, armorClass: number, hitPoints: number, speed: number = 30) {
 		this.name = name;
 		this.armorClass = armorClass;
 		this.hitPoints = hitPoints;
 		this.conditions = [];
+		this.speed = speed;
 	}
 
 	addCondition(condition: TConditionState): void {

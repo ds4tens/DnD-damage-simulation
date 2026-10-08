@@ -35,6 +35,7 @@ class BaseCharacter {
 	armorClass: number;
 	hitPoints: number;
 	conditions: TConditionState[];
+	speed: number = 30;
 	feats: TFeatSelection[];
 
 	constructor(
@@ -51,11 +52,11 @@ class BaseCharacter {
 		this.characterClass = characterClass;
 		this.weapon = weapon;
 		this.weaponPrimaryStat = weaponPrimaryStat;
-		this.stats = stats;
+		this.stats = { ...stats };
 		this.armorClass = armorClass;
 		this.hitPoints = hitPoints;
 		this.conditions = [];
-		this.feats = feats;
+		this.feats = structuredClone(feats);
 	}
 
 	getProficiencyBonus(): number {

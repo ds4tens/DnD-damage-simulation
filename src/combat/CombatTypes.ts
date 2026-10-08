@@ -1,149 +1,131 @@
 import type BaseCharacter from "../character/BaseCharacter.ts";
-import type { TConditionName, TConditionState } from "../modifiers/Conditions.ts";
+import type { DiceRoller } from "../dice/RandomSource.ts";
+import type { TFeatName } from "../feats/Feats.ts";
+import type Weapon from "../Items/Weapon.ts";
+import type { TConditionState } from "../modifiers/Conditions.ts";
+import type { TCombatModifier } from "../modifiers/Modifiers.ts";
+import type BaseMonster from "../monster/BaseMonster.ts";
+import type { DamageComponent, DamagePool, DamageResult, RolledDamageDie } from "./DamageTypes.ts";
+import type { CombatantState, EncounterState, TimedEffect } from "./EncounterState.ts";
+import type { CombatStrategy } from "./Strategy.ts";
 
-/**
- * Минимальная форма любого существа, которое может быть целью в бою
- *
- * Персонажи и монстры должны соответствовать этому контракту. AttackResolver'у
- * нужны отсюда только боевые данные о цели: КД, ХП и кондишены
- */
-export type TCombatTarget = {
-	armorClass: number;
-	hitPoints: number;
-	conditions: TConditionState[];
-	addCondition(condition: TConditionState): void;
-	removeCondition(conditionName: TConditionName): void;
-	hasCondition(conditionName: TConditionName): boolean;
-	getCondition(conditionName: TConditionName): TConditionState | undefined;
+export type CombatantDefinition = BaseCharacter | BaseMonster;
+export type CombatantInput = {
+	id: string;
+	definition: CombatantDefinition;
+	initialClassState?: Record<string, number | boolean | string>;
 };
-
-/**
- * Контекст для эффектов, которые проверяются до того, как существо начинает
- * действовать в свой ход
- *
- * Используется для правил вроде Incapacitated, Stunned и других эффектов,
- * которые могут запретить действия, бонусные действия или реакции еще до
- * выбора атаки. На данном этапе такое невозможно т.к. нет ответных действий монстра
- */
-export type TTurnContext = {
-	actor: BaseCharacter;
-};
-
-/**
- * Общий контекст для эффектов, которые меняют атаку до обработки броска d20
- *
- * Это основной контекст для состояний и классовых умений, влияющих на бросок
- * атаки: Advantage, Disadvantage, штрафы Exhaustion, Reckless Attack, укрытие
- * и так далее
- */
-export type TAttackContext = {
-	attacker: BaseCharacter;
-	target: TCombatTarget;
-	attackIndexInTurn: number;
-	hasHitOccurredThisTurn: boolean;
+export type ActionSource = "attack-action" | "bonus-action" | "reaction" | "other";
+export type AttackMode = "melee" | "ranged" | "thrown";
+export type AttackRequest = {
+	actorId: string;
+	targetId: string;
+	actionSource: ActionSource;
+	actionId?: string;
+	mode: AttackMode;
+	weapon?: Weapon;
 	distance?: number;
+	/** Explicit profile for monsters, Unarmed Strikes and test/scenario contributions. */
+	profile?: { attackBonus: number; damage: readonly DamageComponent[] };
 };
-
-/**
- * Результат одного броска атаки до расчета урона
- *
- * Использовать только как данныее! Результат должен описывать, что произошло,
- * а не решать, что будет дальше
- */
-export type THitResult = {
+export type HitResult = {
 	d20Roll: number;
+	d20Rolls: readonly number[];
 	totalAttackRoll: number;
 	isHit: boolean;
-	isCrit: boolean; // FIXME: Сейчас возможен исход, что значение крит не будет соответствовать isHit
-};
-
-/**
- * Контекст для эффектов, которые применяются при промахе атаки
- *
- * Used this for damage that is applied when an attack misses. Examples: Graze,
- */
-export type TMissContext = TAttackContext & {
-	hit: THitResult;
-};
-
-/**
- * Контекст для эффектов, которые добавляют или меняют урон на этапе броска урона
- *
- * Используется для классовых умений вроде Divine Fury, Brutal Strike,
- * Sneak Attack, а также для будущих правил оружия или заклинаний, которые
- * добавляют урон после попадания атаки
- */
-export type TDamageRollContext = {
-	attacker: BaseCharacter;
-	target: TCombatTarget;
-	attackIndexInTurn: number;
-	hasHitOccurredThisTurn: boolean;
-	isFirstHitOfTurn: boolean;
-	isCrit: boolean;
-	damageType: string;
-	baseDamage: number;
-	distance?: number;
-};
-
-/**
- * Контекст для эффектов, которые применяются после успешного попадания атаки
- *
- * Используется для условий Prone из Ram (WildHEart Barbarian)
- */
-export type TPostHitContext = {
-	attacker: BaseCharacter;
-	target: TCombatTarget;
-	attackIndexInTurn: number;
-	hasHitOccurredThisTurn: boolean;
-	hit: THitResult;
-	distance?: number;
-};
-
-/**
- * Контекст для эффектов, которые меняют урон после броска
- *
- * Используется для сопротивления, уязвимости, иммунитета, временных HP и других
- * модификаторов, влияющих на то, сколько урона цель реально получает
- */
-export type TApplyDamageContext = {
-	attacker: BaseCharacter;
-	target: TCombatTarget;
-	damage: number;
-	damageType: string;
 	isCrit: boolean;
 };
-
-/**
- * Результат расчета урона для одного успешного попадания
- *
- * `rolledDamage` — урон до применения правил цели. `appliedDamage` — урон,
- * который цель фактически получит после сопротивлений, уязвимостей и прочих
- * эффектов
- */
-export type TDamageResult = {
-	rolledDamage: number;
-	appliedDamage: number;
-	damageType: string;
-};
-
-/**
- * Результат одной попытки атаки внутри хода
- *
- * У промах атак нет результата урона. Попавшие атаки должны включать урон, который считается в DamageResolver
- */
-export type TAttackResult = {
+export type AttackResult = {
+	attackId: string;
+	actorId: string;
+	targetId: string;
+	turnId: number;
+	actionSource: ActionSource;
+	source: string;
 	attackIndexInTurn: number;
-	hit: THitResult;
-	damage?: TDamageResult;
+	hit: HitResult;
+	damage?: DamageResult;
+	decisions: readonly DecisionRecord[];
+	triggeredAttacks: readonly AttackResult[];
+	limitations: readonly string[];
+};
+export type AttackActionResult = { totalDamage: number; attacks: readonly AttackResult[] };
+export type DecisionRecord = { feature: string; choice: boolean | string | null; candidates?: readonly DamagePool[] };
+export type TargetSnapshot = { id: string; armorClass: number; hitPoints: number; speed: number };
+export type AttackSnapshot = {
+	actorId: string;
+	targetId: string;
+	turnId: number;
+	turnOwnerId: string;
+	actionSource: ActionSource;
+	isOwnTurn: boolean;
+	bonusActionAvailable: boolean;
+	weapon?: { name: string; category: "melee" | "ranged"; properties: readonly string[] };
+	hit?: HitResult;
+	actor: TargetSnapshot;
+	target: TargetSnapshot;
+};
+export type AttackContext = {
+	encounter: EncounterState;
+	roller: DiceRoller;
+	attacker: CombatantDefinition;
+	character: BaseCharacter | undefined;
+	target: CombatantDefinition;
+	actorState: CombatantState;
+	targetState: CombatantState;
+	request: AttackRequest;
+	weapon: Weapon | undefined;
+	attackIndexInTurn: number;
+	hasHitOccurredThisTurn: boolean;
+	distance?: number;
+	hit?: HitResult;
+	decisions: DecisionRecord[];
+	isOwnTurn: boolean;
+	hasUsed(featureId: string): boolean;
+	markUsed(featureId: string): void;
+	useFeature(featureId: string): boolean;
+	chooseWeaponRoll(candidates: readonly DamagePool[]): number;
+	choosePunctureDie(dice: readonly RolledDamageDie[]): string | null;
+	choosePiercerCriticalDie(dice: readonly RolledDamageDie[]): string | null;
+	chooseHewTarget(): string | null;
+	addEffect(effect: Omit<TimedEffect, "createdTurnId">): void;
+};
+export type HitContext = AttackContext & { hit: HitResult };
+export type TriggeredAttack = { targetId: string; source: string };
+/** Hooks are resolved in named phases, independently of registration order between phases. */
+export type CombatHook = {
+	id: string;
+	featName?: TFeatName;
+	applies?: (ctx: AttackContext) => boolean;
+	attackModifiers?: (ctx: AttackContext) => readonly TCombatModifier[];
+	weaponDamage?: (ctx: HitContext, pool: DamagePool) => DamagePool;
+	damageComponents?: (ctx: HitContext) => readonly DamageComponent[];
+	additionalCriticalDice?: (ctx: HitContext, pool: DamagePool) => DamagePool;
+	afterDamageRoll?: (ctx: HitContext, pool: DamagePool) => DamagePool;
+	onHit?: (ctx: HitContext, pool: DamagePool) => void;
+	afterAttack?: (ctx: AttackContext, result: AttackResult) => readonly TriggeredAttack[];
+};
+export type TurnContext = { actor: CombatantDefinition; encounter: EncounterState; actorState: CombatantState };
+export type AttackEligibility = (request: Readonly<AttackRequest>, encounter: EncounterState) => boolean;
+export type CombatEngineOptions = {
+	roller: DiceRoller;
+	hooks?: readonly CombatHook[];
+	strategy?: Partial<CombatStrategy>;
+	/** Scenario-level visibility/range constraints. Weapon reach/range is additionally checked. */
+	canAttack?: AttackEligibility;
+	/** Optional scenario geometry, recomputed when Hew switches targets. */
+	distanceFor?: (actorId: string, targetId: string) => number | undefined;
 };
 
-/**
- * Результат обработки всех атак существа за его ход
- *
- * Эта форма намеренно подробная: симуляции DPR могут брать `totalDamage`
- * Для отладки смотреть `attacks`
- */
-export type TAttackTurnResult = {
-	totalDamage: number;
-	attacks: TAttackResult[];
-};
+// Existing names remain aliases while consumers migrate to the encounter API.
+export type TCombatTarget = CombatantDefinition;
+export type TTurnContext = TurnContext;
+export type TAttackContext = AttackContext;
+export type THitResult = HitResult;
+export type TPostHitContext = HitContext;
+export type TDamageRollContext = HitContext;
+export type TMissContext = HitContext;
+export type TAttackResult = AttackResult;
+export type TAttackTurnResult = AttackActionResult;
+export type TDamageResult = DamageResult;
+export type TConditionSnapshot = Readonly<TConditionState>;

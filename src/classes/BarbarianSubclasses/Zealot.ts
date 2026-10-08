@@ -1,39 +1,44 @@
-import type { TDamageRollContext } from "../../combat/CombatTypes.ts";
-import Dice from "../../dice/dice.ts";
+import type { TPostHitContext } from "../../combat/CombatTypes.ts";
 import type { TCombatModifier } from "../../modifiers/Modifiers.ts";
 import Barbarian from "../Barbarian.ts";
 
-/**
- * Path of the Zealot skeleton
- */
+/** Partial class support. Configure Divine Fury's type in encounter classState.divineFuryType. */
 class Zealot extends Barbarian {
-	/**
-	 *
-	 * You can channel divine power into your strikes.
-	 * On each of your turns while your Rage is active, the first creature you hit with a weapon or an Unarmed Strike takes extra damage equal to 1d6 plus half your Barbarian level (round down).
-	 * The extra damage is Necrotic or Radiant; you choose the type each time you deal the damage.
-	 */
-	getDivineFuryDamageBonus(ctx: TDamageRollContext): number {
-		if (!ctx.isFirstHitOfTurn || !this.isRaging || ctx.attacker.level < 3) return 0;
-		return new Dice(6).rollWithNormalDistribution() + Math.floor(ctx.attacker.level / 2);
-	}
-
-	/**
-	 * Return damage roll modifiers from Zealot features
-	 */
-	override getDamageRollModifiers(ctx: TDamageRollContext): TCombatModifier[] {
+	override getDamageRollModifiers(ctx: TPostHitContext): TCombatModifier[] {
+		const base = super.getDamageRollModifiers(ctx);
+		const character = ctx.character;
+		if (
+			!character ||
+			character.level < 3 ||
+			!ctx.isOwnTurn ||
+			ctx.hasHitOccurredThisTurn ||
+			ctx.actorState.classState.raging !== true
+		)
+			return base;
+		const selectedType = ctx.actorState.classState.divineFuryType ?? "radiant";
+		if (selectedType !== "radiant" && selectedType !== "necrotic")
+			throw new Error("Divine Fury type must be radiant or necrotic");
 		return [
-			...super.getDamageRollModifiers(ctx),
+			...base,
 			{
 				source: "barbarian.zealot.divine-fury",
 				damageRoll: {
-					bonusFns: [(damageCtx) => this.getDivineFuryDamageBonus(damageCtx)],
+					componentFns: [
+						() => [
+							{
+								id: "barbarian.zealot.divine-fury",
+								source: "barbarian.zealot.divine-fury",
+								origin: "class",
+								damageType: selectedType,
+								dice: [6],
+								flatBonus: Math.floor(character.level / 2),
+								doublesOnCrit: true,
+							},
+						],
+					],
 				},
 			},
 		];
 	}
-
-	// Больше у подкласса ничего и нет
 }
-
 export default Zealot;

@@ -15,6 +15,7 @@ export function buildCharacter(selection: {
 	let stats = selection.stats;
 	selection.feats.forEach((feat) => {
 		const featRule = featRegistry[feat.name as keyof typeof featRegistry];
+		if (!featRule) throw new Error(`Unsupported feat selection: ${feat.name}`);
 		if (featRule?.apllyAbilityScoreImprovement) {
 			stats = featRule.apllyAbilityScoreImprovement(feat, stats, feat.abilityScoreImprovement ?? []);
 		}

@@ -16,6 +16,7 @@ export const Battleaxe = new Weapon(
 	[new Dice(8)],
 	"slashing",
 	EWeaponMastery.TOPPLE,
+	{ category: "melee", properties: ["versatile"] },
 );
 
 /** XPHB p.215 / PHB-style 2024 — simple light melee 1d4 bludgeoning. Mastery: Slow. */
@@ -59,6 +60,7 @@ export const Glaive = new Weapon(
 	[new Dice(10)],
 	"slashing",
 	EWeaponMastery.GRAZE,
+	{ category: "melee", properties: ["heavy", "reach", "two-handed"], reach: 10 },
 );
 
 /** XPHB p.215 — martial heavy two-handed melee axe; 1d12 slashing. Mastery: Cleave. */
@@ -102,6 +104,7 @@ export const Greatsword = new Weapon(
 	[new Dice(6), new Dice(6)],
 	"slashing",
 	EWeaponMastery.GRAZE,
+	{ category: "melee", properties: ["heavy", "two-handed"] },
 );
 
 /** XPHB p.215 — martial heavy two-handed polearm with reach; 1d10 slashing. Mastery: Cleave. */
@@ -187,6 +190,7 @@ export const Maul = new Weapon(
 	[new Dice(6), new Dice(6)],
 	"bludgeoning",
 	EWeaponMastery.TOPPLE,
+	{ category: "melee", properties: ["heavy", "two-handed"] },
 );
 
 /** XPHB p.215 — martial one-handed morningstar; 1d8 piercing. Mastery: Sap. */
