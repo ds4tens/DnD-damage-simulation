@@ -5,11 +5,12 @@ import {
 	type LegalCharacterBuild,
 } from "../character/CharacterBuild.ts";
 import { CombatEngine } from "../combat/AttackResolver.ts";
-import type { AttackResult, CombatantInput } from "../combat/CombatTypes.ts";
+import type { AttackResult, CombatantInput, UnarmedEffectResult } from "../combat/CombatTypes.ts";
 import { EncounterState } from "../combat/EncounterState.ts";
 import { freezeSnapshot } from "../combat/Strategy.ts";
 import { SeededDiceRoller } from "../dice/RandomSource.ts";
 import BaseMonster from "../monster/BaseMonster.ts";
+import { carryActorToNextEpisode } from "./ActorCarry.ts";
 import { aggregateDprTrials } from "./Aggregation.ts";
 import { collectDamageMetrics } from "./AttackMetrics.ts";
 import {
@@ -23,6 +24,7 @@ import {
 import { combatRngAlgorithm, deriveSeed, type SeedIdentity, seedDerivationVersion } from "./Seed.ts";
 import { canonicalJson, toJson } from "./Serialization.ts";
 import type {
+	ActorHealth,
 	DprBatchOptions,
 	DprBatchResult,
 	DprEpisodeResult,
@@ -57,6 +59,11 @@ function resourceDifference(before: ResourceCounts, after: ResourceCounts): Reco
 	return Object.fromEntries([...ids].sort().map((id) => [id, (after[id] ?? 0) - (before[id] ?? 0)]));
 }
 
+function actorHealth(encounter: EncounterState): ActorHealth {
+	const state = encounter.state(dprActorId);
+	return { hitPoints: state.hitPoints, temporaryHitPoints: state.temporaryHp };
+}
+
 function prepare(source: DprExperiment): {
 	experiment: DprExperiment;
 	build: LegalCharacterBuild;
@@ -76,10 +83,18 @@ function prepare(source: DprExperiment): {
 	assertLegalCharacterBuild(build);
 	if (experiment.rulesetId !== build.selection.ruleset)
 		throw new Error("Simulation ruleset must match the legal build");
-	const support = assessBuildSupport(build, {
+	const supportContext = {
 		...(experiment.requestedBenefits ? { requestedBenefits: experiment.requestedBenefits } : {}),
-		lighting: "bright",
-	});
+		lighting: experiment.scenario.lighting ?? "bright",
+		targetConditions: [
+			...new Set(
+				experiment.scenario.episodes.flatMap((episode) =>
+					episode.targets.flatMap((target) => (target.conditions ?? []).map((condition) => condition.name)),
+				),
+			),
+		],
+	};
+	const support = assessBuildSupport(build, supportContext);
 	const metadata: DprMetadata = {
 		rulesetId: experiment.rulesetId,
 		rulesVersion: build.rulesVersion,
@@ -91,10 +106,13 @@ function prepare(source: DprExperiment): {
 		strategyParameters: toJson(experiment.strategyParameters),
 		scenario: toJson({
 			...experiment.scenario,
+			lighting: experiment.scenario.lighting ?? "bright",
 			episodes: experiment.scenario.episodes.map((episode) => ({
 				...episode,
 				rounds: episode.rounds ?? defaultCombatRounds,
 				cleaveProbability: episode.cleaveProbability ?? 1,
+				attack: episode.attack ?? { kind: "weapon" },
+				allowUnarmedEffects: episode.allowUnarmedEffects ?? false,
 			})),
 		}),
 		randomness: {
@@ -105,6 +123,7 @@ function prepare(source: DprExperiment): {
 		},
 		metric: "post-defense-damage-per-planned-combat-round",
 		targetBehavior: "passive-stand-on-own-turn",
+		actorHealthPolicy: "carry-across-episodes-long-rest-restores",
 	};
 	return { experiment, build, metadata };
 }
@@ -153,6 +172,7 @@ function runPreparedTrial(
 		const environmentSeed = deriveSeed(identity, `environment:${episode.id}`);
 		const roller = options.combatRandomness?.createRoller(combatSeed, episode.id) ?? new SeededDiceRoller(combatSeed);
 		const environment = new SeededDiceRoller(environmentSeed);
+		const targetIds = new Set(episode.targets.map((target) => target.id));
 		const encounter = new EncounterState([actor, ...episode.targets.map(targetInput)]);
 		const engine = new CombatEngine(encounter, {
 			roller,
@@ -162,20 +182,25 @@ function runPreparedTrial(
 		});
 		if (episodeIndex === 0 && experiment.scenario.initialRecovery) {
 			const beforeResources = encounter.resourceSnapshot(dprActorId);
-			engine.recoverResources(dprActorId, experiment.scenario.initialRecovery);
+			const beforeActorHealth = actorHealth(encounter);
+			engine.completeRest(dprActorId, experiment.scenario.initialRecovery);
 			initialRecovery = {
 				event: experiment.scenario.initialRecovery,
 				beforeResources,
 				afterResources: encounter.resourceSnapshot(dprActorId),
+				beforeActorHealth,
+				afterActorHealth: actorHealth(encounter),
 			};
 		}
 		const initialResources = encounter.resourceSnapshot(dprActorId);
+		const initialActorHealth = actorHealth(encounter);
 		const spentBefore = encounter.resourceSpentSnapshot(dprActorId);
 		const initialSpentWeaponInstanceIds = [...encounter.state(dprActorId).spentWeaponInstanceIds];
 		const scheduler = engine.createScheduler(episode.initiative ?? {});
 		const plannedRounds = episode.rounds ?? defaultCombatRounds;
 		const damageByRound = Array<number>(plannedRounds).fill(0);
 		const attacks: AttackResult[] = [];
+		const unarmedEffects: UnarmedEffectResult[] = [];
 		const limitations = new Set(build.report.limitations.map((benefit) => `${benefit.id} (${benefit.domain})`));
 		while (scheduler.roundNumber <= plannedRounds) {
 			const roundIndex = scheduler.roundNumber - 1;
@@ -187,30 +212,35 @@ function runPreparedTrial(
 				if (hasLivingTarget) {
 					for (const feature of engine.resolveFeatureActions(dprActorId, "before-attack"))
 						attacks.push(...feature.attacks);
-					const attackOptions =
-						episode.attack?.kind === "unarmed"
+					const attackOptions = {
+						unarmedEffects: episode.allowUnarmedEffects ?? false,
+						...(episode.attack?.kind === "unarmed"
 							? { unarmed: true }
 							: episode.attack?.mode
 								? { mode: episode.attack.mode }
-								: {};
+								: {}),
+					};
 					const target = episode.targets.find(
 						(candidate) =>
 							encounter.state(candidate.id).lifeState !== "dead" &&
-							engine.legalAttackCandidates(dprActorId, candidate.id, attackOptions).length > 0,
+							(engine.legalAttackCandidates(dprActorId, candidate.id, attackOptions).length > 0 ||
+								(attackOptions.unarmedEffects &&
+									engine.legalUnarmedEffectCandidates(dprActorId, candidate.id).length > 0)),
 					);
 					if (target && encounter.canUseAction(dprActorId)) {
 						const result = engine.resolveAttackAction(dprActorId, target.id, attackOptions);
 						attacks.push(...result.attacks);
+						unarmedEffects.push(...(result.unarmedEffects ?? []));
 					}
 					for (const feature of engine.resolveFeatureActions(dprActorId, "after-attack"))
 						attacks.push(...feature.attacks);
 				}
 			} else engine.standUp(actorId);
 			scheduler.endTurn();
-			const metrics = collectDamageMetrics(engine.damageEvents.slice(eventOffset), dprActorId);
+			const metrics = collectDamageMetrics(engine.damageEvents.slice(eventOffset), dprActorId, targetIds);
 			damageByRound[roundIndex] = (damageByRound[roundIndex] ?? 0) + metrics.appliedDamage;
 		}
-		const metrics = collectDamageMetrics(engine.damageEvents, dprActorId);
+		const metrics = collectDamageMetrics(engine.damageEvents, dprActorId, targetIds);
 		const collectLimitations = (attack: AttackResult): void => {
 			for (const limitation of attack.limitations) limitations.add(limitation);
 			for (const child of attack.triggeredAttacks) collectLimitations(child);
@@ -226,6 +256,8 @@ function runPreparedTrial(
 			damageByRound,
 			initialResources,
 			finalResources,
+			initialActorHealth,
+			finalActorHealth: actorHealth(encounter),
 			resourceCost: resourceDifference(spentBefore, encounter.resourceSpentSnapshot(dprActorId)),
 			weaponInstancesSpent: finalSpentWeaponInstanceIds.length - initialSpentWeaponInstanceIds.length,
 			initialSpentWeaponInstanceIds,
@@ -233,25 +265,23 @@ function runPreparedTrial(
 			initiative: scheduler.initiative,
 			seeds: { combat: combatSeed, environment: environmentSeed },
 			limitations: [...limitations].sort(),
-			...(options.retainAttacks ? { attacks } : {}),
+			...(options.retainAttacks ? { attacks, unarmedEffects } : {}),
 		});
 		const transition = experiment.scenario.transitions?.[episodeIndex];
 		if (transition) {
 			const beforeResources = encounter.resourceSnapshot(dprActorId);
+			const beforeActorHealth = actorHealth(encounter);
 			engine.advanceElapsedTime(transition.elapsedMinutes);
-			if (transition.rest) engine.recoverResources(dprActorId, transition.rest);
-			transitions.push({ ...transition, beforeResources, afterResources: encounter.resourceSnapshot(dprActorId) });
+			if (transition.rest) engine.completeRest(dprActorId, transition.rest);
+			transitions.push({
+				...transition,
+				beforeResources,
+				afterResources: encounter.resourceSnapshot(dprActorId),
+				beforeActorHealth,
+				afterActorHealth: actorHealth(encounter),
+			});
 		}
-		const persistent = engine.exportPersistentState(dprActorId);
-		const nextBase = combatantInputForBuild(build, dprActorId);
-		actor = {
-			...nextBase,
-			initialResources: persistent.resources,
-			initialClassState: { ...nextBase.initialClassState, ...persistent.classState },
-			initialSpentWeaponInstanceIds: persistent.spentWeaponInstanceIds,
-			weapons: encounter.weapons(dprActorId),
-			initialHands: { ...encounter.state(dprActorId).hands },
-		};
+		actor = carryActorToNextEpisode(build, engine);
 	}
 	const plannedRounds = episodes.reduce((sum, episode) => sum + episode.plannedRounds, 0);
 	const appliedDamage = episodes.reduce((sum, episode) => sum + episode.appliedDamage, 0);

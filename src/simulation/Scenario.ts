@@ -1,6 +1,7 @@
 import type { CleaveCandidate } from "../combat/CombatTypes.ts";
 import type { EncounterState } from "../combat/EncounterState.ts";
 import type { DiceRoller } from "../dice/RandomSource.ts";
+import { conditionRegistry } from "../modifiers/Conditions.ts";
 import type { DprEpisode, DprScenario } from "./SimulationTypes.ts";
 
 export const dprActorId = "hero";
@@ -11,7 +12,27 @@ function distance(value: number): void {
 	if (!Number.isFinite(value) || value < 0) throw new Error("Static distances must be finite and nonnegative");
 }
 
+function staticEnvironment(value: object): void {
+	const lighting: unknown = Reflect.get(value, "lighting");
+	if (lighting !== undefined && lighting !== "bright")
+		throw new Error("Static DPR scenarios support bright lighting only");
+	if (Object.hasOwn(value, "cover"))
+		throw new Error("Cover is outside the static DPR scenario; target AC excludes Cover");
+}
+
+function validateTargetConditions(conditions: unknown): void {
+	if (conditions === undefined) return;
+	if (!Array.isArray(conditions)) throw new Error("Target conditions must be an array");
+	for (const condition of conditions) {
+		if (typeof condition !== "object" || condition === null) throw new Error("Invalid target condition");
+		const name: unknown = Reflect.get(condition, "name");
+		if (typeof name !== "string" || !Object.hasOwn(conditionRegistry, name))
+			throw new Error(`Unsupported target condition: ${String(name)}`);
+	}
+}
+
 export function validateScenario(scenario: DprScenario): void {
+	staticEnvironment(scenario);
 	if (!scenario.id.trim() || scenario.episodes.length === 0) throw new Error("A scenario requires an ID and episodes");
 	if (scenario.initialRecovery !== undefined && !["short-rest", "long-rest"].includes(scenario.initialRecovery))
 		throw new Error("Invalid initial recovery event");
@@ -19,12 +40,29 @@ export function validateScenario(scenario: DprScenario): void {
 	if (episodeIds.some((id) => !id.trim()) || new Set(episodeIds).size !== episodeIds.length)
 		throw new Error("Episode IDs must be distinct and nonempty");
 	for (const episode of scenario.episodes) {
+		staticEnvironment(episode);
+		if (episode.allowUnarmedEffects !== undefined && typeof episode.allowUnarmedEffects !== "boolean")
+			throw new Error("Unarmed effect policy must be boolean");
+		if (episode.attack !== undefined) {
+			if (episode.attack.kind !== "weapon" && episode.attack.kind !== "unarmed") throw new Error("Invalid attack kind");
+			if (
+				episode.attack.kind === "weapon" &&
+				episode.attack.mode !== undefined &&
+				!["melee", "ranged", "thrown"].includes(episode.attack.mode)
+			)
+				throw new Error("Invalid weapon attack mode");
+			if (episode.attack.kind === "unarmed" && Object.hasOwn(episode.attack, "mode"))
+				throw new Error("Unarmed attacks have no weapon mode");
+		}
 		const rounds = episode.rounds ?? defaultCombatRounds;
 		if (!Number.isSafeInteger(rounds) || rounds < 1) throw new Error("A combat horizon must contain positive rounds");
 		const ids = episode.targets.map((target) => target.id);
 		if (ids.length === 0 || new Set(ids).size !== ids.length || ids.some((id) => !id.trim() || id === dprActorId))
 			throw new Error("Each episode requires distinct targets, excluding the reserved hero ID");
 		for (const target of episode.targets) {
+			staticEnvironment(target);
+			validateTargetConditions(target.conditions);
+			if (target.combatOptions) staticEnvironment(target.combatOptions);
 			if (!Number.isSafeInteger(target.armorClass) || target.armorClass < 0) throw new Error("Invalid target AC");
 			distance(target.distanceToActor);
 			if (target.speed !== undefined) distance(target.speed);
@@ -90,7 +128,8 @@ export function createEpisodeCleaveProvider(episode: DprEpisode, encounter: Enco
 		const candidates = episode.targets.flatMap((target): CleaveCandidate[] => {
 			if (target.id === primaryTargetId || encounter.state(target.id).lifeState === "dead") return [];
 			const primaryDistance = staticDistance(episode, primaryTargetId, target.id);
-			if (target.distanceToActor > 5 || primaryDistance === undefined || primaryDistance > 5) return [];
+			// Actual attack reach is a rules decision (e.g. Reach/Battering Roots), not scenario geometry.
+			if (primaryDistance === undefined || primaryDistance > 5) return [];
 			return [{ targetId: target.id, distanceToActor: target.distanceToActor, distanceToPrimary: primaryDistance }];
 		});
 		if (candidates.length === 0) return [];

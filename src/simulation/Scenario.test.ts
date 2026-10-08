@@ -28,6 +28,23 @@ test("static geometry is symmetric and missing pairs cannot authorize Cleave", (
 	assert.equal(staticDistance({ ...episode, targetDistances: [] }, "first", "second"), undefined);
 });
 
+test("Cleave provider preserves adjacent targets beyond five feet so rules can apply actual reach", () => {
+	const extended = {
+		...episode,
+		cleaveProbability: 1,
+		targets: episode.targets.map((target) => ({ ...target, distanceToActor: 15 })),
+	};
+	const state = new EncounterState(
+		extended.targets.map((target) => ({ id: target.id, definition: new BaseMonster(target.id, 15, 10) })),
+	);
+	assert.deepEqual(
+		createEpisodeCleaveProvider(extended, state, new FixedDiceRoller([]))("hero", "first", 1).map(
+			(candidate) => candidate.distanceToActor,
+		),
+		[15, 15],
+	);
+});
+
 test("multi-target Cleave samples once per global turn with fresh independent providers", () => {
 	const state = new EncounterState(
 		episode.targets.map((target) => ({ id: target.id, definition: new BaseMonster(target.id, 15, 10) })),
@@ -90,4 +107,43 @@ test("day schedules require explicit >=10-minute gaps and coherent target and in
 	assert.throws(() =>
 		validateScenario({ id: "invalid", episodes: [{ ...episode, targets: [{ ...firstTarget, id: "hero" }] }] }),
 	);
+});
+
+test("malformed attack policies reject instead of silently producing zero or a different attack", () => {
+	const malformed = { ...episode, attack: { kind: "weapon" as const, mode: "melee" as const } };
+	Reflect.set(malformed.attack, "mode", "spell");
+	assert.throws(() => validateScenario({ id: "malformed", episodes: [malformed] }), /attack mode/);
+	Reflect.set(malformed.attack, "kind", "spell");
+	assert.throws(() => validateScenario({ id: "malformed", episodes: [malformed] }), /attack kind/);
+	Reflect.set(malformed.attack, "kind", "unarmed");
+	assert.throws(() => validateScenario({ id: "malformed", episodes: [malformed] }), /weapon mode/);
+});
+
+test("unsupported lighting and Cover reject globally, independently of selected build features", () => {
+	const dark = { id: "unsupported-lighting", episodes: [episode] };
+	Reflect.set(dark, "lighting", "darkness");
+	assert.throws(() => validateScenario(dark), /bright lighting/);
+	Reflect.set(dark, "lighting", "dim");
+	assert.throws(() => validateScenario(dark), /bright lighting/);
+	const covered = structuredClone({ id: "unsupported-cover", episodes: [episode] });
+	const target = covered.episodes[0]?.targets[0];
+	assert.ok(target);
+	Reflect.set(target, "cover", "half");
+	assert.throws(() => validateScenario(covered), /Cover/);
+});
+
+test("unknown and unsupported JSON condition names reject rather than silently removing their effects", () => {
+	const first = episode.targets[0];
+	assert.ok(first);
+	const target = { ...first, conditions: [{ name: "prone" as const }] };
+	const scenario = { id: "conditions", episodes: [{ ...episode, targets: [target], targetDistances: [] }] };
+	validateScenario(scenario);
+	for (const name of ["petrified", "charmed", "frightened", "banana", "__proto__"]) {
+		Reflect.set(target.conditions[0] ?? {}, "name", name);
+		assert.throws(() => validateScenario(scenario), /Unsupported target condition/);
+	}
+	Reflect.set(target, "conditions", [null]);
+	assert.throws(() => validateScenario(scenario), /Invalid target condition/);
+	Reflect.set(target, "conditions", {});
+	assert.throws(() => validateScenario(scenario), /conditions must be an array/);
 });

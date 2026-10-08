@@ -16,6 +16,7 @@ const metadata: DprMetadata = {
 	randomness: { rootSeed: 1, seedDerivation: "fixture", combatAlgorithm: "fixture", environmentAlgorithm: "fixture" },
 	metric: "post-defense-damage-per-planned-combat-round",
 	targetBehavior: "passive-stand-on-own-turn",
+	actorHealthPolicy: "carry-across-episodes-long-rest-restores",
 };
 function trial(trialIndex: number, value: number): DprTrialResult {
 	const episode = {
@@ -29,6 +30,8 @@ function trial(trialIndex: number, value: number): DprTrialResult {
 		damageByRound: [value],
 		initialResources: {},
 		finalResources: {},
+		initialActorHealth: { hitPoints: 20, temporaryHitPoints: 0 },
+		finalActorHealth: { hitPoints: 20, temporaryHitPoints: 0 },
 		resourceCost: trialIndex === 0 ? { rage: 1 } : {},
 		weaponInstancesSpent: 0,
 		initialSpentWeaponInstanceIds: [],

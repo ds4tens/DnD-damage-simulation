@@ -27,6 +27,7 @@ export function runDprSimulationDemo() {
 					species: { id: "human", skill: "insight" },
 					humanOriginFeat: { name: "lucky" },
 					classSkills: ["perception", "survival"],
+					primalKnowledgeSkill: "nature",
 					progression: [
 						{
 							level: 4,

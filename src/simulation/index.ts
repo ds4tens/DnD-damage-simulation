@@ -3,6 +3,7 @@ export { runDprBatch, runDprTrial } from "./DprSimulation.ts";
 export { defaultCombatRounds, defaultTrials } from "./Scenario.ts";
 export { combatRngAlgorithm, deriveSeed, seedDerivationVersion } from "./Seed.ts";
 export type {
+	ActorHealth,
 	DprAggregate,
 	DprBatchOptions,
 	DprBatchResult,
@@ -13,7 +14,11 @@ export type {
 	DprScenario,
 	DprTarget,
 	DprTransition,
+	DprTransitionResult,
 	DprTrialOptions,
 	DprTrialResult,
+	JsonValue,
+	ResourceCost,
+	ResourceCounts,
 } from "./SimulationTypes.ts";
 export { type Estimate, estimate } from "./Statistics.ts";

@@ -178,6 +178,112 @@ test("forged builds and unsupported requested benefits reject before strategy cr
 	assert.equal(strategies, 0);
 });
 
+test("Invisible targets in a late episode gate unimplemented Blindsight before any strategy or RNG factory", () => {
+	const visible = episode();
+	const invisible = {
+		...episode("second"),
+		targets: episode("second").targets.map((target) => ({ ...target, conditions: [{ name: "invisible" as const }] })),
+	};
+	const input = experiment({
+		id: "late-invisible",
+		episodes: [visible, invisible],
+		transitions: [{ afterEpisodeId: "first", elapsedMinutes: 10 }],
+	});
+	const selected = {
+		...selection(),
+		level: 4,
+		subclass: "berserker",
+		primalKnowledgeSkill: "nature",
+		progression: [
+			{ level: 4, feat: { name: "skulker", abilityScoreImprovement: [{ abilityScore: "dexterity", amount: 1 }] } },
+		],
+	} satisfies CharacterBuildSelection;
+	input.buildFactory = () => buildLegalCharacter(selected);
+	let strategies = 0;
+	let rollers = 0;
+	input.strategyFactory = () => {
+		strategies++;
+		return {};
+	};
+	assert.throws(
+		() =>
+			runDprTrial(input, {
+				combatRandomness: {
+					algorithm: "never-reached",
+					parameters: null,
+					createRoller: () => {
+						rollers++;
+						return new FixedDiceRoller([]);
+					},
+				},
+			}),
+		/Unsupported.*sight|Blindsight/i,
+	);
+	assert.equal(strategies, 0);
+	assert.equal(rollers, 0);
+	// Bright-light Darkvision cannot reveal Invisible creatures and does not block
+	// a plain Dwarf's ordinary attack with the engine's Invisible Disadvantage.
+	const ordinary = runDprTrial(experiment({ id: "dwarf-invisible", episodes: [invisible] }), fixed([10, 18, 6]));
+	assert.equal(ordinary.appliedDamage, 9);
+});
+
+test("out-of-scope lighting rejects before validated build construction for every build", () => {
+	const input = experiment();
+	Reflect.set(input.scenario, "lighting", "dim");
+	let builds = 0;
+	input.buildFactory = () => {
+		builds++;
+		return buildLegalCharacter(selection());
+	};
+	assert.throws(() => runDprBatch(input), /bright lighting only/);
+	assert.equal(builds, 0);
+});
+
+test("unsupported late-episode JSON conditions reject before build, strategy and RNG construction", () => {
+	const invalidTarget = {
+		...episode().targets[0],
+		id: "target",
+		armorClass: 15,
+		hitPoints: { mode: "inexhaustible" as const },
+		distanceToActor: 5,
+		conditions: [{ name: "prone" as const }],
+	};
+	const input = experiment({
+		id: "late-unsupported-condition",
+		episodes: [episode(), { ...episode("second"), targets: [invalidTarget] }],
+		transitions: [{ afterEpisodeId: "first", elapsedMinutes: 10 }],
+	});
+	let builds = 0;
+	let strategies = 0;
+	let rollers = 0;
+	input.buildFactory = () => {
+		builds++;
+		return buildLegalCharacter(selection());
+	};
+	input.strategyFactory = () => {
+		strategies++;
+		return {};
+	};
+	for (const name of ["petrified", "banana"]) {
+		Reflect.set(invalidTarget.conditions[0] ?? {}, "name", name);
+		assert.throws(
+			() =>
+				runDprTrial(input, {
+					combatRandomness: {
+						algorithm: "never-reached",
+						parameters: null,
+						createRoller: () => {
+							rollers++;
+							return new FixedDiceRoller([]);
+						},
+					},
+				}),
+			/Unsupported target condition/,
+		);
+	}
+	assert.deepEqual([builds, strategies, rollers], [0, 0, 0]);
+});
+
 test("every scheduled episode validates before starting any trial", () => {
 	const bad = {
 		...episode("late"),
@@ -198,7 +304,11 @@ test("every scheduled episode validates before starting any trial", () => {
 });
 
 test("spent physical thrown instances carry across day episodes without replenishment", () => {
-	const first = { ...episode(), attack: { kind: "weapon" as const, mode: "thrown" as const } };
+	const first = {
+		...episode(),
+		targets: episode().targets.map((target) => ({ ...target, distanceToActor: 10 })),
+		attack: { kind: "weapon" as const, mode: "thrown" as const },
+	};
 	const second = { ...first, id: "second" };
 	const input = experiment({
 		id: "one-javelin-day",
