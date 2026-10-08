@@ -18,7 +18,7 @@ export type FeatSelection = {
 export type ValidatedFeatSelection = {
 	name: FeatName;
 	type: FeatCategory;
-	abilityScoreImprovement?: AbilityScoreIncrease[];
+	abilityScoreImprovement?: readonly AbilityScoreIncrease[];
 };
 export type FeatMetadata = {
 	readonly name: FeatName;

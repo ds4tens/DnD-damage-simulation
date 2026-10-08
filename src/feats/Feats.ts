@@ -1,42 +1,37 @@
-import type { TStatBlock, TStatsType } from "../character/BaseCharacter.ts";
-export enum EFeatName {
-	SAVAGE_ATTACKER = "savage-attacker",
-	SLASHER = "slasher",
-	PIERCER = "piercer",
-	GREAT_WEAPON_MASTERY = "great-weapon-master",
-	ABLITY_SCORE_IMPROVEMENT = "ability-score-improvement",
-}
-export type TFeatName = `${EFeatName}`;
-export type TFeatType = "origin" | "general";
-export type TAbilityScoreImprovement = { abilityScore: TStatsType; amount: number }[];
-export type TFeatSelection = { name: TFeatName; type: TFeatType; abilityScoreImprovement?: TAbilityScoreImprovement };
-export type TFeat = TFeatSelection & { repeatable?: boolean };
-export type TFeatRule = {
-	name: TFeatName;
-	type: TFeatType;
-	repeatable?: boolean;
-	allowedAbilityScores?: TStatsType[];
-	maxAbilityScoreIncrease?: number;
-	apllyAbilityScoreImprovement?: (
-		feat: TFeatSelection,
-		stats: TStatBlock,
-		improvedStats: TAbilityScoreImprovement,
-	) => TStatBlock;
-};
-/** Transitional selection metadata. Unsupported combat feats fail explicitly unless their hooks are registered. */
-export const featRegistry: Partial<Record<TFeatName, TFeatRule>> = {
-	[EFeatName.ABLITY_SCORE_IMPROVEMENT]: {
-		name: EFeatName.ABLITY_SCORE_IMPROVEMENT,
-		type: "general",
-		repeatable: true,
-		apllyAbilityScoreImprovement: (_feat, stats, improvements) => {
-			const result = { ...stats };
-			for (const selection of improvements)
-				result[selection.abilityScore] = Math.max(
-					result[selection.abilityScore],
-					Math.min(20, result[selection.abilityScore] + selection.amount),
-				);
-			return result;
-		},
-	},
-};
+import type { CombatHook } from "../combat/CombatTypes.ts";
+import { type FeatMetadata, type FeatName, featMetadata } from "./FeatTypes.ts";
+import { greatWeaponMasterHook } from "./GreatWeaponMaster.ts";
+import { piercerHook } from "./Piercer.ts";
+import { savageAttackerHook } from "./SavageAttacker.ts";
+import { slasherHook } from "./Slasher.ts";
+
+export type FeatRule = FeatMetadata & { readonly combatHook?: CombatHook };
+/** Canonical base-2024 registry. Extensions must be requested explicitly by engine callers. */
+export const featRegistry: Readonly<Record<FeatName, FeatRule>> = Object.freeze({
+	"ability-score-improvement": featMetadata["ability-score-improvement"],
+	"savage-attacker": Object.freeze({
+		...featMetadata["savage-attacker"],
+		combatHook: Object.freeze(savageAttackerHook),
+	}),
+	piercer: Object.freeze({ ...featMetadata.piercer, combatHook: Object.freeze(piercerHook) }),
+	slasher: Object.freeze({ ...featMetadata.slasher, combatHook: Object.freeze(slasherHook) }),
+	"great-weapon-master": Object.freeze({
+		...featMetadata["great-weapon-master"],
+		combatHook: Object.freeze(greatWeaponMasterHook),
+	}),
+});
+export const featCombatHooks: readonly CombatHook[] = Object.freeze(
+	Object.values(featRegistry).flatMap((rule) => (rule.combatHook ? [rule.combatHook] : [])),
+);
+export { applyAbilityScoreImprovement, applyFeatAbilityScoreImprovement } from "./AbilityScoreImprovement.ts";
+export { resolveFeatSelections } from "./FeatSelection.ts";
+export type {
+	AbilityScoreIncrease,
+	FeatCategory,
+	FeatMetadata,
+	FeatName,
+	FeatSelection,
+	ValidatedFeatSelection,
+} from "./FeatTypes.ts";
+export { abilityScores, EFeatName, featMetadata, getFeatMetadata } from "./FeatTypes.ts";
+export { greatWeaponMasterHook, piercerHook, savageAttackerHook, slasherHook };

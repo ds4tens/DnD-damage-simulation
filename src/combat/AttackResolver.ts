@@ -1,5 +1,6 @@
 import BaseCharacter from "../character/BaseCharacter.ts";
 import type { DiceRoller } from "../dice/RandomSource.ts";
+import { featCombatHooks } from "../feats/Feats.ts";
 import { weaponMasteryRegistry } from "../Items/Weapon/WeaponMastery.ts";
 import type Weapon from "../Items/Weapon.ts";
 import { conditionRegistry } from "../modifiers/Conditions.ts";
@@ -84,9 +85,12 @@ export class CombatEngine {
 	) {
 		this.encounter = encounter;
 		this.strategy = { ...defaultStrategy, ...options.strategy };
-		this.hooks = [...(options.hooks ?? [])];
-		const hookIds = this.hooks.map((hook) => hook.id);
-		if (new Set(hookIds).size !== hookIds.length) throw new Error("Duplicate combat hook IDs");
+		const customHooks = options.hooks ?? [];
+		const hookIds = customHooks.map((hook) => hook.id);
+		if (new Set(hookIds).size !== hookIds.length) throw new Error("Duplicate custom combat hook IDs");
+		const registered = new Map(featCombatHooks.map((hook) => [hook.id, hook]));
+		for (const hook of customHooks) registered.set(hook.id, hook);
+		this.hooks = [...registered.values()];
 		for (const id of encounter.ids) {
 			const definition = encounter.definition(id);
 			if (definition instanceof BaseCharacter)
@@ -306,6 +310,10 @@ export class CombatEngine {
 		if (hit.isHit) this.encounter.turn.hitActors.add(request.actorId);
 		const triggeredAttacks: AttackResult[] = [];
 		const result: AttackResult = {
+			mode: request.mode,
+			...(ctx.weapon
+				? { weapon: { name: ctx.weapon.name, category: ctx.weapon.category, properties: [...ctx.weapon.properties] } }
+				: {}),
 			attackId: attack.id,
 			actorId: request.actorId,
 			targetId: request.targetId,

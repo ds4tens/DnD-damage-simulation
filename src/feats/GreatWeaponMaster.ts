@@ -32,7 +32,7 @@ export const greatWeaponMasterHook: CombatHook = {
 		if (
 			ctx.weapon?.category !== "melee" ||
 			!ctx.encounter.canUseBonusAction(ctx.request.actorId) ||
-			!(result.hit.isHit && (result.hit.isCrit || result.damage?.hp.reducedToZero))
+			!((result.hit.isHit && result.hit.isCrit) || result.damage?.hp.reducedToZero)
 		)
 			return [];
 		const targetId = ctx.chooseHewTarget();

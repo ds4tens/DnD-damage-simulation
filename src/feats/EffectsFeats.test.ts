@@ -28,7 +28,7 @@ function hero(weapon: Weapon, feats: EFeatName[]) {
 		weapon,
 		"strength",
 		{
-			strength: 18,
+			strength: feats.includes(EFeatName.GREAT_WEAPON_MASTER) ? 17 : 18,
 			dexterity: 10,
 			constitution: 10,
 			intelligence: 10,
@@ -37,7 +37,13 @@ function hero(weapon: Weapon, feats: EFeatName[]) {
 		},
 		12,
 		100,
-		feats.map((name) => ({ name, type: "general" })),
+		feats.map((name) => ({
+			name,
+			type: "general",
+			abilityScoreImprovement: [
+				{ abilityScore: name === EFeatName.GREAT_WEAPON_MASTER ? "strength" : "dexterity", amount: 1 },
+			],
+		})),
 	);
 }
 function fixture(
@@ -54,7 +60,7 @@ function fixture(
 ) {
 	const weapon = options.weapon ?? sword;
 	const encounter = new EncounterState([
-		{ id: "hero", definition: hero(weapon, options.feats ?? [EFeatName.SLASHER, EFeatName.GREAT_WEAPON_MASTERY]) },
+		{ id: "hero", definition: hero(weapon, options.feats ?? [EFeatName.SLASHER, EFeatName.GREAT_WEAPON_MASTER]) },
 		{ id: "ally", definition: hero(weapon, [EFeatName.SLASHER]) },
 		{ id: "enemy", definition: new BaseMonster("Enemy", 10, options.hp ?? 100, options.speed ?? 30) },
 		{ id: "other", definition: new BaseMonster("Other", 10, 100) },

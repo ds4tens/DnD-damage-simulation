@@ -74,6 +74,9 @@ function fixture(
 				? [
 						{
 							name: hook.featName,
+							...(hook.featName === "savage-attacker"
+								? {}
+								: { abilityScoreImprovement: [{ abilityScore: "dexterity" as const, amount: 1 }] }),
 							type: hook.featName === EFeatName.SAVAGE_ATTACKER ? ("origin" as const) : ("general" as const),
 						},
 					]

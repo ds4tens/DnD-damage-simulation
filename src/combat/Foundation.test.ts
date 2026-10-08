@@ -455,11 +455,12 @@ test("Zealot Divine Fury keeps chosen type, flat level bonus and injected critic
 	assert.equal(f.roller.remaining, 0);
 });
 test("explicit unsupported feats/mastery fail; partial classes report structured limitations", () => {
-	const hero = character();
-	hero.feats.push({ name: EFeatName.PIERCER, type: "general" });
 	assert.throws(
-		() => new CombatEngine(new EncounterState([{ id: "hero", definition: hero }]), { roller: new FixedDiceRoller([]) }),
-		/Unsupported combat feat/,
+		() =>
+			new BaseCharacter(4, new BaseClass([weapon]), weapon, "strength", character().stats, 16, 50, [
+				{ name: EFeatName.PIERCER },
+			]),
+		/Invalid ability score/,
 	);
 	const topple = new Weapon(
 		"Topple test",

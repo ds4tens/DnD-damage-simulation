@@ -1,5 +1,4 @@
 import type BaseClass from "../classes/BaseClass.ts";
-import { resolveFeatSelections } from "../feats/FeatSelection.ts";
 import type { FeatSelection } from "../feats/FeatTypes.ts";
 import type Weapon from "../Items/Weapon.ts";
 import type { TStatBlock } from "./BaseCharacter.ts";
@@ -13,16 +12,14 @@ export function buildCharacter(selection: {
 	stats: TStatBlock;
 	feats: readonly FeatSelection[];
 }): BaseCharacter {
-	const { stats, feats } = resolveFeatSelections(selection);
-
 	return new BaseCharacter(
 		selection.level,
 		selection.characterClass,
 		selection.weapon,
 		selection.weaponPrimaryStat,
-		stats,
+		selection.stats,
 		16,
 		50,
-		feats,
+		selection.feats,
 	);
 }

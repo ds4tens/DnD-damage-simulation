@@ -43,7 +43,6 @@ export class EncounterState {
 			definition.conditions = structuredClone(original.conditions);
 			if (original instanceof BaseCharacter && definition instanceof BaseCharacter) {
 				definition.stats = { ...original.stats };
-				definition.feats = structuredClone(original.feats);
 			}
 			this.definitions.set(participant.id, definition);
 			this.states.set(participant.id, {

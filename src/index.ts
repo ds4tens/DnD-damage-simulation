@@ -1,25 +1,23 @@
-import BaseCharacter from "./character/BaseCharacter.ts";
-import BaseClass from "./classes/BaseClass.ts";
-import { CombatEngine } from "./combat/AttackResolver.ts";
-import { EncounterState } from "./combat/EncounterState.ts";
-import { SeededDiceRoller } from "./dice/RandomSource.ts";
-import { Glaive } from "./Items/Weapon/WeaponList.ts";
-import BaseMonster from "./monster/BaseMonster.ts";
+import { createFiveFeatScenario } from "./scenarios/FiveFeats.ts";
 
-// Foundation demonstration; P5 adds the completed feat scenario.
-const character = new BaseCharacter(6, new BaseClass([Glaive]), Glaive, "strength", {
-	strength: 16,
-	dexterity: 10,
-	constitution: 10,
-	intelligence: 10,
-	wisdom: 10,
-	charisma: 10,
-});
-const encounter = new EncounterState([
-	{ id: "hero", definition: character },
-	{ id: "target", definition: new BaseMonster("Training Ogre", 12, 50) },
-]);
-const engine = new CombatEngine(encounter, { roller: new SeededDiceRoller(2024) });
-encounter.beginTurn("hero");
-console.log(JSON.stringify(engine.resolveAttackAction("hero", "target", { distance: 5 }), null, 2));
-encounter.endTurn();
+const scenario = createFiveFeatScenario();
+const result = scenario.run();
+console.log(
+	JSON.stringify(
+		{
+			scenario: "Synthetic Heavy Slashing 2d6 + Piercing d8; five base-2024 feats",
+			ruleset: "D&D 2024 base; no supplements",
+			randomness: "fixed deterministic sequence",
+			strength: { before: scenario.baseStats.strength, after: scenario.character.stats.strength },
+			feats: scenario.character.feats,
+			attack: result,
+			targets: [scenario.encounter.snapshot("first"), scenario.encounter.snapshot("second")],
+			effects: scenario.encounter.effectsOn("first"),
+			bonusActionAvailable: scenario.encounter.turn.bonusActionAvailable,
+			remainingFixedRolls: scenario.roller.remaining,
+		},
+		null,
+		2,
+	),
+);
+scenario.encounter.endTurn();

@@ -1,6 +1,6 @@
 import type BaseCharacter from "../character/BaseCharacter.ts";
 import type { DiceRoller } from "../dice/RandomSource.ts";
-import type { TFeatName } from "../feats/Feats.ts";
+import type { FeatName } from "../feats/FeatTypes.ts";
 import type Weapon from "../Items/Weapon.ts";
 import type { TConditionState } from "../modifiers/Conditions.ts";
 import type { TCombatModifier } from "../modifiers/Modifiers.ts";
@@ -36,6 +36,8 @@ export type HitResult = {
 	isCrit: boolean;
 };
 export type AttackResult = {
+	mode: AttackMode;
+	weapon?: { name: string; category: "melee" | "ranged"; properties: readonly string[] };
 	attackId: string;
 	actorId: string;
 	targetId: string;
@@ -95,7 +97,7 @@ export type TriggeredAttack = { targetId: string; source: string };
 /** Hooks are resolved in named phases, independently of registration order between phases. */
 export type CombatHook = {
 	id: string;
-	featName?: TFeatName;
+	featName?: FeatName;
 	applies?: (ctx: AttackContext) => boolean;
 	attackModifiers?: (ctx: AttackContext) => readonly TCombatModifier[];
 	weaponDamage?: (ctx: HitContext, pool: DamagePool) => DamagePool;

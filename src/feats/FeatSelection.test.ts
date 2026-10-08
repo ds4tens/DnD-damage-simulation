@@ -171,7 +171,9 @@ test("builder resolves choices and keeps builds, stats and selection arrays inde
 	first.stats.strength = 5;
 	const choice = first.feats[0]?.abilityScoreImprovement?.[0];
 	assert.ok(choice);
-	choice.amount = 99;
+	assert.throws(() => {
+		choice.amount = 99;
+	}, TypeError);
 	assert.equal(second.stats.strength, 18);
 	assert.equal(second.feats[0]?.abilityScoreImprovement?.[0]?.amount, 2);
 	assert.equal(input.feats[0]?.abilityScoreImprovement?.[0]?.amount, 2);
@@ -197,7 +199,9 @@ test("frozen inputs remain unchanged after successful and rejected multi-feat se
 	assert.notEqual(result.feats[0], selection);
 	const choices = result.feats[0]?.abilityScoreImprovement;
 	assert.ok(choices);
-	choices[0] = increase("strength", 1);
+	const detached = choices[0];
+	assert.ok(detached);
+	detached.amount = 1;
 	assert.equal(choice.amount, 2);
 	assert.throws(() => resolveFeatSelections({ ...input, feats: [selection, asi()] }), /Invalid ability score/);
 	assert.equal(input.stats.strength, 16);
