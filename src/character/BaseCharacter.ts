@@ -1,8 +1,10 @@
 import type BaseClass from "../classes/BaseClass.ts";
+import type { DamageDefenses } from "../combat/DamageTypes.ts";
 import { resolveFeatSelections } from "../feats/FeatSelection.ts";
 import type { FeatSelection, ValidatedFeatSelection } from "../feats/FeatTypes.ts";
 import type Weapon from "../Items/Weapon.ts";
 import type { TConditionName, TConditionState } from "../modifiers/Conditions.ts";
+import { type CombatantOptions, combatantData } from "./CombatantData.ts";
 
 export type TStatsType = "strength" | "dexterity" | "constitution" | "intelligence" | "wisdom" | "charisma";
 
@@ -38,6 +40,10 @@ class BaseCharacter {
 	conditions: TConditionState[];
 	speed: number = 30;
 	readonly feats: readonly ValidatedFeatSelection[];
+	readonly savingThrowProficiencies: readonly TStatsType[];
+	readonly savingThrowBonuses: Partial<Record<TStatsType, number>>;
+	readonly defenses: DamageDefenses;
+	readonly medicineProficient: boolean;
 
 	constructor(
 		level: number,
@@ -48,7 +54,13 @@ class BaseCharacter {
 		armorClass: number = 16,
 		hitPoints: number = 1,
 		feats: readonly FeatSelection[] = [],
+		combatOptions: CombatantOptions = {},
 	) {
+		const data = combatantData(combatOptions, characterClass.savingThrowProficiencies);
+		this.savingThrowProficiencies = data.savingThrowProficiencies;
+		this.savingThrowBonuses = data.savingThrowBonuses;
+		this.defenses = data.defenses;
+		this.medicineProficient = data.medicineProficient;
 		this.level = level;
 		this.characterClass = characterClass;
 		this.weapon = weapon;
@@ -81,6 +93,13 @@ class BaseCharacter {
 		if (this.level <= 16) return 5;
 		if (this.level <= 20) return 6;
 		throw new Error(`Unsupported character level: ${this.level}`);
+	}
+
+	getSavingThrowBonus(ability: TStatsType): number {
+		return (
+			this.savingThrowBonuses[ability] ??
+			this.getStatModifier(ability) + (this.savingThrowProficiencies.includes(ability) ? this.getProficiencyBonus() : 0)
+		);
 	}
 
 	getStatModifier(stat: TStatsType): number {
