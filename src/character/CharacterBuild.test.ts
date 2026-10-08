@@ -47,6 +47,130 @@ test("legal factory earns slots by level, rejects raw/serialized provenance and 
 	assert.throws(() => buildLegalCharacter({ ...sampleSelection(), subclass: "berserker" }), /before level 3/);
 	assert.equal(Object.isFrozen(Club), false);
 });
+test("explicit thrown stock adds finite physical copies beyond equipment, with zero leaving inventory unchanged", () => {
+	const selection: CharacterBuildSelection = {
+		...sampleSelection(),
+		equipment: {
+			armorId: "none",
+			shield: false,
+			weapons: [{ id: "javelin-1", weaponId: "javelin" }],
+			hands: { left: "javelin-1", right: null },
+		},
+		masteredWeaponIds: [],
+	};
+	const stock = buildLegalCharacter({ ...selection, stock: { thrownWeapons: { javelin: 2 } } });
+	const supplied = combatantInputForBuild(stock, "hero");
+	assert.deepEqual(
+		supplied.weapons?.map((instance) => instance.id),
+		["javelin-1", "stock:javelin:1", "stock:javelin:2"],
+	);
+	assert.deepEqual(
+		supplied.weapons?.map((instance) => instance.weapon.id),
+		["javelin", "javelin", "javelin"],
+	);
+	assert.deepEqual(supplied.initialHands, { left: "javelin-1", right: null });
+	assert.equal(stock.selection.equipment.weapons.length, 1);
+	assert.equal(stock.selection.stock?.thrownWeapons?.javelin, 2);
+	const none = buildLegalCharacter({ ...selection, stock: { thrownWeapons: { javelin: 0 } } });
+	assert.deepEqual(none.combatDefaults.weapons, buildLegalCharacter(selection).combatDefaults.weapons);
+});
+test("legal physical weapon IDs cannot collide with internal shield or grapple hand markers", () => {
+	for (const id of ["$shield", "$grapple:target", "$grapple:"]) {
+		const selection: CharacterBuildSelection = {
+			...sampleSelection(),
+			equipment: {
+				armorId: "none",
+				shield: false,
+				weapons: [{ id, weaponId: "mace" }],
+				hands: { left: id, right: null },
+			},
+			masteredWeaponIds: [],
+		};
+		const before = structuredClone(selection);
+		assert.throws(() => buildLegalCharacter(selection), /weapon instance selection/);
+		assert.deepEqual(selection, before);
+	}
+});
+test("generated thrown-stock IDs avoid all supplied IDs and remain stable across catalog insertion order", () => {
+	const selection: CharacterBuildSelection = {
+		...sampleSelection(),
+		equipment: {
+			armorId: "none",
+			shield: false,
+			weapons: [
+				{ id: "stock:javelin:1", weaponId: "javelin" },
+				{ id: "stock:dagger:1", weaponId: "dagger" },
+				{ id: "stock:dagger:1:1", weaponId: "dagger" },
+			],
+			hands: { left: "stock:javelin:1", right: null },
+		},
+		masteredWeaponIds: [],
+	};
+	const first = buildLegalCharacter({ ...selection, stock: { thrownWeapons: { javelin: 2, dagger: 2 } } });
+	const reordered = buildLegalCharacter({ ...selection, stock: { thrownWeapons: { dagger: 2, javelin: 2 } } });
+	const ids = first.combatDefaults.weapons?.map((instance) => instance.id);
+	assert.deepEqual(ids, [
+		"stock:javelin:1",
+		"stock:dagger:1",
+		"stock:dagger:1:1",
+		"stock:dagger:1:2",
+		"stock:dagger:2",
+		"stock:javelin:1:1",
+		"stock:javelin:2",
+	]);
+	assert.equal(new Set(ids).size, 7);
+	assert.deepEqual(reordered.combatDefaults.weapons, first.combatDefaults.weapons);
+});
+test("thrown stock rejects non-Thrown weapons and invalid counts before materialization", () => {
+	assert.throws(
+		() => buildLegalCharacter({ ...sampleSelection(), stock: { thrownWeapons: { greatsword: 1 } } }),
+		/thrown weapon stock/,
+	);
+	for (const count of [-1, 1.5, Number.MAX_SAFE_INTEGER + 1, Number.POSITIVE_INFINITY])
+		assert.throws(
+			() => buildLegalCharacter({ ...sampleSelection(), stock: { thrownWeapons: { javelin: count } } }),
+			/thrown weapon stock/,
+		);
+	assert.equal(
+		buildLegalCharacter({ ...sampleSelection(), stock: { thrownWeapons: { javelin: 100 } } }).combatDefaults.weapons
+			?.length,
+		101,
+	);
+});
+test("stock-only physical inventory supplies its real default weapon without a placeholder instance", () => {
+	const build = buildLegalCharacter({
+		...sampleSelection(),
+		equipment: { armorId: "none", shield: false, weapons: [], hands: { left: null, right: null } },
+		masteredWeaponIds: [],
+		stock: { thrownWeapons: { javelin: 2 } },
+	});
+	assert.equal(build.character.weapon.id, "javelin");
+	assert.deepEqual(
+		build.combatDefaults.weapons?.map((instance) => instance.weapon.id),
+		["javelin", "javelin"],
+	);
+	assert.deepEqual(build.combatDefaults.initialHands, { left: null, right: null });
+});
+test("materialized stock and its declaration are detached and frozen without ASI replay or duplicated supply", () => {
+	const selection = sampleSelection(4);
+	const stock = { thrownWeapons: { javelin: 2 } };
+	const build = buildLegalCharacter({ ...selection, stock });
+	stock.thrownWeapons.javelin = 99;
+	assert.equal(build.selection.stock?.thrownWeapons?.javelin, 2);
+	assert.equal(build.character.buildData?.stock.thrownWeapons?.javelin, 2);
+	assert.equal(build.character.stats.strength, 19);
+	assert.equal(selection.pointBuy.strength, 15);
+	assert.equal(Object.isFrozen(build.combatDefaults.weapons), true);
+	assert.equal(Object.isFrozen(build.combatDefaults.weapons?.[1]), true);
+	assert.equal(Object.isFrozen(build.selection.stock?.thrownWeapons), true);
+	const first = new EncounterState([combatantInputForBuild(build, "hero")]);
+	const second = new EncounterState([combatantInputForBuild(build, "hero")]);
+	assert.equal(first.weapons("hero").length, 3);
+	assert.equal(second.weapons("hero").length, 3);
+	assert.equal((first.definition("hero") as typeof build.character).stats.strength, 19);
+	assert.equal((second.definition("hero") as typeof build.character).stats.strength, 19);
+	assert.notEqual(first.weapons("hero"), second.weapons("hero"));
+});
 test("Epic19 then Primal Champion20 follows different caps and retroactive HP Constitution", () => {
 	const selection = sampleSelection(20);
 	const build = buildLegalCharacter({

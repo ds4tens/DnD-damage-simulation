@@ -13,6 +13,7 @@ export type ProgressionFeatChoice = { readonly level: 4 | 8 | 12 | 16 | 19; read
 export type ConsumableStock = {
 	readonly poisonDoses?: number;
 	readonly ammunition?: Readonly<Partial<Record<AmmunitionKind, number>>>;
+	/** Additional finite physical copies beyond equipment.weapons; materialized once by the legal builder. */
 	readonly thrownWeapons?: Readonly<Partial<Record<WeaponCatalogId, number>>>;
 };
 export type CharacterBuildSelection = {
@@ -36,6 +37,7 @@ export type CharacterBuildSelection = {
 	readonly equipment: {
 		readonly armorId: ArmorCatalogId;
 		readonly shield: boolean;
+		/** Physical IDs exclude the internal $shield marker and $grapple: reservation namespace. */
 		readonly weapons: readonly { readonly id: string; readonly weaponId: WeaponCatalogId }[];
 		readonly hands: Readonly<HandState>;
 	};

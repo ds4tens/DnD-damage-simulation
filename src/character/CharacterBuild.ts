@@ -3,7 +3,7 @@ import Berserker from "../classes/BarbarianSubclasses/Berserker.ts";
 import WildHeart from "../classes/BarbarianSubclasses/WildHeart.ts";
 import WorldTree from "../classes/BarbarianSubclasses/WorldTree.ts";
 import Zealot from "../classes/BarbarianSubclasses/Zealot.ts";
-import type { CombatantInput } from "../combat/CombatTypes.ts";
+import type { CombatantInput, WeaponInstance } from "../combat/CombatTypes.ts";
 import type { DamageType } from "../combat/DamageTypes.ts";
 import { resolveFeatSelections } from "../feats/FeatSelection.ts";
 import { abilityScores, type FeatSelection, getFeatMetadata } from "../feats/FeatTypes.ts";
@@ -92,7 +92,14 @@ function validateEquipment(selection: CharacterBuildSelection, armorTraining: re
 	if (!gear || !Object.hasOwn(armorCatalog, gear.armorId) || typeof gear.shield !== "boolean" || !isArray(gear.weapons))
 		throw new Error("Invalid equipment selection");
 	if (
-		gear.weapons.some((w) => !w.id || w.id === "$shield" || !Object.hasOwn(weaponTypes2024, w.weaponId)) ||
+		gear.weapons.some(
+			(w) =>
+				typeof w.id !== "string" ||
+				!w.id ||
+				w.id === "$shield" ||
+				w.id.startsWith("$grapple:") ||
+				!Object.hasOwn(weaponTypes2024, w.weaponId),
+		) ||
 		new Set(gear.weapons.map((w) => w.id)).size !== gear.weapons.length
 	)
 		throw new Error("Invalid or duplicate weapon instance selection");
@@ -132,6 +139,27 @@ function validateStock(selection: CharacterBuildSelection): void {
 			!valid(n)
 		)
 			throw new Error("Invalid explicit thrown weapon stock");
+}
+/** Declared thrown stock adds finite physical copies once; rest never recreates them. */
+function materializeWeaponInventory(selection: CharacterBuildSelection): WeaponInstance[] {
+	const inventory = selection.equipment.weapons.map((instance) => ({
+		id: instance.id,
+		weapon: weaponTypes2024[instance.weaponId],
+	}));
+	const usedIds = new Set(inventory.map((instance) => instance.id));
+	const stock = Object.entries(selection.stock?.thrownWeapons ?? {}).sort(([left], [right]) =>
+		left < right ? -1 : left > right ? 1 : 0,
+	);
+	for (const [weaponId, count] of stock)
+		for (let index = 0; index < count; index++) {
+			const baseId = `stock:${weaponId}:${index + 1}`;
+			let id = baseId;
+			let suffix = 1;
+			while (usedIds.has(id)) id = `${baseId}:${suffix++}`;
+			usedIds.add(id);
+			inventory.push({ id, weapon: weaponTypes2024[weaponId as WeaponCatalogId] });
+		}
+	return inventory;
 }
 function freezeBuild<T>(value: T): T {
 	if (value !== null && typeof value === "object") {
@@ -287,7 +315,8 @@ export function buildLegalCharacter(raw: CharacterBuildSelection): LegalCharacte
 		dwarf: selection.species.id === "dwarf",
 		fortitude: selectedNames.includes("boon-of-fortitude"),
 	});
-	const weapon = selection.equipment.weapons[0] ? weaponTypes2024[selection.equipment.weapons[0].weaponId] : Club;
+	const inventory = materializeWeaponInventory(selection);
+	const weapon = inventory[0]?.weapon ?? Club;
 	const armor = armorCatalog[selection.equipment.armorId];
 	const resistances: DamageType[] = [];
 	if (selection.species.id === "aasimar") resistances.push("necrotic", "radiant");
@@ -343,10 +372,7 @@ export function buildLegalCharacter(raw: CharacterBuildSelection): LegalCharacte
 	];
 	const report = summarizeBenefitSupport(benefits);
 	const combatDefaults: Omit<CombatantInput, "id" | "definition"> = {
-		weapons: selection.equipment.weapons.map((instance) => ({
-			id: instance.id,
-			weapon: weaponTypes2024[instance.weaponId],
-		})),
+		weapons: inventory,
 		initialHands: { ...selection.equipment.hands },
 		masteredWeaponIds: [...new Set([...selection.masteredWeaponIds, ...featMasteredWeaponIds])],
 		initialClassState: { armorCategory: armor.category },
