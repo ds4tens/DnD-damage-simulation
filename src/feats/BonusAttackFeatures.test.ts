@@ -1,6 +1,8 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import BaseCharacter, { defaultStatBlock } from "../character/BaseCharacter.ts";
+import { buildLegalCharacter, combatantInputForBuild } from "../character/CharacterBuild.ts";
+import { sampleSelection } from "../character/CharacterBuildTestFixtures.ts";
 import BaseClass from "../classes/BaseClass.ts";
 import { CombatEngine } from "../combat/AttackResolver.ts";
 import { EncounterState } from "../combat/EncounterState.ts";
@@ -72,6 +74,135 @@ test("Pole Strike accepts2024 Heavy+Reach Pike, uses d4 Bludgeoning and requires
 	);
 	assert.equal(encounter.canUseBonusAction("hero"), false);
 });
+
+test("legal Pole Strike critical keeps Overwhelming Strike Bludgeoning against Piercing immunity", () => {
+	const build = buildLegalCharacter({
+		...sampleSelection(19),
+		progression: [
+			{ level: 4, feat: polearm },
+			{
+				level: 8,
+				feat: { name: "ability-score-improvement", abilityScoreImprovement: [{ abilityScore: "strength", amount: 2 }] },
+			},
+			{
+				level: 12,
+				feat: {
+					name: "ability-score-improvement",
+					abilityScoreImprovement: [{ abilityScore: "constitution", amount: 2 }],
+				},
+			},
+			{
+				level: 16,
+				feat: {
+					name: "ability-score-improvement",
+					abilityScoreImprovement: [{ abilityScore: "constitution", amount: 2 }],
+				},
+			},
+			{
+				level: 19,
+				feat: {
+					name: "boon-of-irresistible-offense",
+					abilityScoreImprovement: [{ abilityScore: "strength", amount: 1 }],
+				},
+			},
+		],
+		equipment: {
+			armorId: "none",
+			shield: false,
+			weapons: [{ id: "pike", weaponId: "pike" }],
+			hands: { left: "pike", right: "pike" },
+		},
+		masteredWeaponIds: [],
+	});
+	const encounter = new EncounterState([
+		combatantInputForBuild(build, "hero"),
+		{
+			id: "target",
+			definition: new BaseMonster("Piercing immune", 15, 1000, 30, { defenses: { immunities: ["piercing"] } }),
+			hitPointMode: "inexhaustible",
+		},
+	]);
+	const roller = new FixedDiceRoller([1, 1, 20, 2, 3]);
+	const engine = new CombatEngine(encounter, {
+		roller,
+		distanceFor: () => 10,
+		strategy: {
+			useOptionalFeature: (_snapshot, id) => id === "polearm-master.pole-strike",
+			useFeature: (_snapshot, id) => id === "boon-of-irresistible-offense.overwhelming-strike",
+		},
+	});
+	engine.beginTurn("hero");
+	assert.equal(engine.resolveAttackAction("hero", "target").totalDamage, 0);
+	const bonus = engine.resolveFeatureActions("hero", "after-attack")[0]?.attacks[0];
+	assert.equal(bonus?.attackOrigin, "pole-strike");
+	assert.equal(bonus?.hit.isCrit, true);
+	assert.equal(bonus?.damage?.appliedDamage, 31); // 2d4(2+3) + STR5 + score21, score never doubled.
+	assert.equal(bonus?.damage?.components.find((component) => component.origin === "feat")?.damageType, "bludgeoning");
+	assert.equal(roller.remaining, 0);
+});
+for (const weaponId of ["pike", "glaive"] as const)
+	test(`legal ${weaponId} Pole Strike uses actual d4 Bludgeoning for damage feats`, () => {
+		const build = buildLegalCharacter({
+			...sampleSelection(16),
+			progression: [
+				{ level: 4, feat: polearm },
+				{
+					level: 8,
+					feat: { name: "piercer", abilityScoreImprovement: [{ abilityScore: "dexterity", amount: 1 }] },
+				},
+				{
+					level: 12,
+					feat: { name: "slasher", abilityScoreImprovement: [{ abilityScore: "strength", amount: 1 }] },
+				},
+				{
+					level: 16,
+					feat: { name: "crusher", abilityScoreImprovement: [{ abilityScore: "constitution", amount: 1 }] },
+				},
+			],
+			equipment: {
+				armorId: "none",
+				shield: false,
+				weapons: [{ id: "polearm", weaponId }],
+				hands: { left: "polearm", right: "polearm" },
+			},
+			masteredWeaponIds: [],
+		});
+		const encounter = new EncounterState([
+			combatantInputForBuild(build, "hero"),
+			{ id: "target", definition: new BaseMonster("Target", 15, 1000), hitPointMode: "inexhaustible" },
+		]);
+		const roller = new FixedDiceRoller([1, 1, 20, 1, 2, 3, 4]);
+		const engine = new CombatEngine(encounter, {
+			roller,
+			distanceFor: () => 10,
+			strategy: {
+				useOptionalFeature: (_snapshot, id) => id === "polearm-master.pole-strike",
+				useFeature: (_snapshot, id) => id === "savage-attacker",
+			},
+		});
+		engine.beginTurn("hero");
+		assert.equal(engine.resolveAttackAction("hero", "target").totalDamage, 0);
+		const bonus = engine.resolveFeatureActions("hero", "after-attack")[0]?.attacks[0];
+		assert.equal(bonus?.damage?.appliedDamage, 11); // Savage selects d4(3+4) + STR4.
+		assert.deepEqual(
+			bonus?.damage?.components[0]?.dice.map((die) => die.sides),
+			[4, 4],
+		);
+		assert.equal(
+			bonus?.damage?.components.some((component) => component.source.startsWith("feat.piercer")),
+			false,
+		);
+		assert.equal(
+			encounter.effectsOn("hero").some((effect) => effect.kind === "crusher.enhanced-critical"),
+			true,
+		);
+		assert.equal(
+			encounter.effectsOn("target").some((effect) => effect.kind.startsWith("slasher.")),
+			false,
+		);
+		assert.equal(encounter.effectiveSpeed("target"), 30);
+		assert.equal(roller.remaining, 0);
+	});
 test("Dual Wielder earns a Bonus Action after Light misses and adds no positive ability modifier", () => {
 	const encounter = new EncounterState([
 		{

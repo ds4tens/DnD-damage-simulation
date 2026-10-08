@@ -2,8 +2,8 @@ import BaseCharacter from "../character/BaseCharacter.ts";
 import type { CombatHook } from "../combat/CombatTypes.ts";
 import { rerollDamageDie, rollDamageComponents } from "../combat/DamageResolver.ts";
 
-/** PHB2024 p209 Tavern Brawler; primary BasicRules2024 card checked2026-10-08.
- * https://www.dndbeyond.com/sources/dnd/br-2024/feats#TavernBrawler
+/** PHB2024 p202 Tavern Brawler; secondary XPHB card checked2026-10-08.
+ * https://5e.tools/feats.html#tavern%20brawler_xphb
  * Replace only the ordinary Unarmed component, then reroll each1 once and keep
  * the replacement. An Unarmed Strike remains eligible for class attack damage.
  */
@@ -217,7 +217,8 @@ export const poisonerHook: CombatHook = {
 };
 /** PHB2024 p211 Boon of Irresistible Offense; primary BasicRules2024 checked
  * https://www.dndbeyond.com/sources/dnd/br-2024/feats#BoonofIrresistibleOffense
- * Extra natural20 damage is the selected score, never its modifier or new dice.
+ * Extra natural20 damage is the selected score, never its modifier or new dice;
+ * its type follows the prepared attack, including Pole Strike's Bludgeoning.
  */
 export const irresistibleOffenseHook: CombatHook = {
 	id: "feat.boon-of-irresistible-offense",
@@ -240,7 +241,7 @@ export const irresistibleOffenseHook: CombatHook = {
 			{
 				id: "boon-of-irresistible-offense.overwhelming-strike",
 				source: "feat.boon-of-irresistible-offense.overwhelming-strike",
-				damageType: ctx.weapon?.damageType ?? "bludgeoning",
+				damageType: ctx.preparedWeapon?.damageComponents[0]?.damageType ?? ctx.weapon?.damageType ?? "bludgeoning",
 				origin: "feat",
 				dice: [],
 				flatBonus: ctx.character.stats[ability],
