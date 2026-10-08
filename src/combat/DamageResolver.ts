@@ -1,71 +1,110 @@
-import type BaseCharacter from "../character/BaseCharacter.ts";
-import type { TCombatModifier } from "../modifiers/Modifiers.ts";
-import type { TCombatTarget, TDamageResult, TDamageRollContext } from "./CombatTypes.ts";
+import type { DiceRoller } from "../dice/RandomSource.ts";
+import { validateSides } from "../dice/RandomSource.ts";
+import type {
+	DamageByType,
+	DamageComponent,
+	DamagePool,
+	DamageResult,
+	RolledDamageComponent,
+	RolledDamageDie,
+} from "./DamageTypes.ts";
+import type { EncounterState } from "./EncounterState.ts";
 
-/**
- * Бросок урона оружия для одного успешного попадания
- *
- * Сейчас критические попадания удваивают только кости оружия. Постоянные
- * бонусы и бонусы от модификаторов добавляются один раз
- */
-export function rollWeaponDamage(attacker: BaseCharacter, isCrit: boolean): number {
-	return attacker.weapon.damage.reduce((totalDamage, dice) => {
-		const normalRoll = dice.rollWithNormalDistribution();
-		const critRoll = isCrit ? dice.rollWithNormalDistribution() : 0;
-		return totalDamage + normalRoll + critRoll;
-	}, 0);
+export function rollDamageComponents(
+	components: readonly DamageComponent[],
+	isCrit: boolean,
+	roller: DiceRoller,
+): DamagePool {
+	return components.map((component) => {
+		const dice: RolledDamageDie[] = [];
+		component.dice.forEach((sides, index) => {
+			dice.push({
+				id: `${component.id}:base:${index}`,
+				componentId: component.id,
+				sides,
+				value: roller.roll(sides),
+				provenance: "base",
+			});
+			if (isCrit && component.doublesOnCrit)
+				dice.push({
+					id: `${component.id}:crit:${index}`,
+					componentId: component.id,
+					sides,
+					value: roller.roll(sides),
+					provenance: "critical-copy",
+				});
+		});
+		return { ...component, dice };
+	});
 }
-
-/**
- * Подсчитывает выброшенный урон до правил, которые применяются со стороны цели
- *
- * Здесь должны собираться бонусы урона от класса, подкласса, оружия и заклинаний (скорее всего заклинания сломают это)
- */
-export function resolveRolledDamage(ctx: TDamageRollContext, modifiers: TCombatModifier[]): number {
-	const modifierDamage = modifiers
-		.flatMap((modifier) => modifier.damageRoll?.bonusFns ?? [])
-		.reduce((total, bonusFn) => total + bonusFn(ctx), 0);
-
-	return ctx.baseDamage + ctx.attacker.getDamageBonus() + modifierDamage;
+export function validateDamagePool(pool: DamagePool): void {
+	const componentIds = new Set<string>();
+	const dieIds = new Set<string>();
+	for (const component of pool) {
+		if (componentIds.has(component.id) || !component.id)
+			throw new Error(`Duplicate/empty damage component ID: ${component.id}`);
+		componentIds.add(component.id);
+		if (!Number.isFinite(component.flatBonus)) throw new Error("Invalid flat damage bonus");
+		for (const die of component.dice) {
+			validateSides(die.sides);
+			if (dieIds.has(die.id) || !die.id || die.componentId !== component.id)
+				throw new Error(`Invalid damage die ID: ${die.id}`);
+			if (!Number.isSafeInteger(die.value) || die.value < 1 || die.value > die.sides)
+				throw new Error("Invalid damage die value");
+			dieIds.add(die.id);
+		}
+	}
 }
-
-/**
- * Определяет, сколько урона цель в итоге получает
- *
- * TODO: Добавить сюда сопротивление, уязвимость, иммунитет, временные хиты
- * и настоящее изменение HP (TODO: when add GWM/Bloodied feat or subclass that have kill condition)
- */
-export function resolveAppliedDamage(rolledDamage: number): number {
-	return rolledDamage;
+export function allDamageDice(pool: DamagePool): readonly RolledDamageDie[] {
+	return pool.flatMap((component) => component.dice);
 }
-
-/**
- * Полностью обрабатывает урон для одного успешного попадания
- *
- * AttackResolver должен вызывать это после того, как станет ясно, попала ли
- * атака и было ли попадание критическим
- */
-export function resolveDamage(
-	attacker: BaseCharacter,
-	target: TCombatTarget,
-	ctx: Omit<TDamageRollContext, "baseDamage" | "damageType">,
-	modifiers: TCombatModifier[],
-): TDamageResult {
-	const damageType = attacker.weapon.damageType;
-	const baseDamage = rollWeaponDamage(attacker, ctx.isCrit);
-	const damageRollContext: TDamageRollContext = {
-		...ctx,
-		attacker,
-		target,
-		baseDamage,
-		damageType,
+export function rerollDamageDie(pool: DamagePool, dieId: string, roller: DiceRoller): DamagePool {
+	const candidate = allDamageDice(pool).find((die) => die.id === dieId);
+	if (!candidate) throw new Error(`Unknown damage die: ${dieId}`);
+	const value = roller.roll(candidate.sides);
+	return pool.map((component) => ({
+		...component,
+		dice: component.dice.map((die) => (die.id === dieId ? { ...die, value, rerolledFrom: die.value } : die)),
+	}));
+}
+/** Additional dice are already the extra critical benefit and must never be doubled again. */
+export function appendAdditionalDie(
+	pool: DamagePool,
+	component: Omit<DamageComponent, "dice" | "doublesOnCrit">,
+	sides: number,
+	roller: DiceRoller,
+): DamagePool {
+	const entry: RolledDamageComponent = {
+		...component,
+		doublesOnCrit: false,
+		dice: [
+			{
+				id: `${component.id}:additional:0`,
+				componentId: component.id,
+				sides,
+				value: roller.roll(sides),
+				provenance: "additional",
+			},
+		],
 	};
-	const rolledDamage = resolveRolledDamage(damageRollContext, modifiers);
-	const appliedDamage = resolveAppliedDamage(rolledDamage);
-
-	return {
-		rolledDamage,
-		appliedDamage,
-		damageType,
-	};
+	return [...pool, entry];
+}
+export function sumDamageByType(pool: DamagePool): DamageByType {
+	const totals: DamageByType = {};
+	for (const component of pool)
+		totals[component.damageType] =
+			(totals[component.damageType] ?? 0) +
+			component.flatBonus +
+			component.dice.reduce((sum, die) => sum + die.value, 0);
+	// Negative ability modifiers never heal a target.
+	for (const type of Object.keys(totals) as (keyof DamageByType)[]) totals[type] = Math.max(0, totals[type] ?? 0);
+	return totals;
+}
+export function resolveDamage(encounter: EncounterState, targetId: string, pool: DamagePool): DamageResult {
+	validateDamagePool(pool);
+	const byType = sumDamageByType(pool);
+	const rolledDamage = Object.values(byType).reduce((sum, value) => sum + (value ?? 0), 0);
+	// Resistances, immunity and temporary HP are deliberately not modeled in this scope.
+	const appliedDamage = rolledDamage;
+	return { components: pool, byType, rolledDamage, appliedDamage, hp: encounter.applyDamage(targetId, appliedDamage) };
 }

@@ -1,37 +1,42 @@
-import type { TDamageRollContext } from "../../combat/CombatTypes.ts";
-import Dice from "../../dice/dice.ts";
+import type { TPostHitContext } from "../../combat/CombatTypes.ts";
 import type { TCombatModifier } from "../../modifiers/Modifiers.ts";
 import Barbarian from "../Barbarian.ts";
 
-/**
- * Path of the Berserker skeleton
- *
- * TODO: Need reaction; Level 10: Retaliation
- */
+/** Partial class support; Retaliation and the full Reckless Attack model are not implemented. */
 class Berserker extends Barbarian {
-	getFrenzyDamageBonus(ctx: TDamageRollContext): number {
-		if (!this.isRaging || !ctx.isFirstHitOfTurn || ctx.attacker.level < 3 || !this.isUsingRecklessAttack(ctx)) return 0;
-
-		const rageDamageBonus = this.getRageDamageBonus(ctx.attacker.level);
-		let damageBonus = 0;
-		for (let diceIndex = 0; diceIndex < rageDamageBonus; diceIndex++) {
-			damageBonus += new Dice(6).rollWithNormalDistribution();
-		}
-
-		return damageBonus;
-	}
-
-	override getDamageRollModifiers(ctx: TDamageRollContext): TCombatModifier[] {
+	override getDamageRollModifiers(ctx: TPostHitContext): TCombatModifier[] {
+		const base = super.getDamageRollModifiers(ctx);
+		const character = ctx.character;
+		if (
+			!character ||
+			character.level < 3 ||
+			!ctx.isOwnTurn ||
+			ctx.hasHitOccurredThisTurn ||
+			ctx.actorState.classState.raging !== true ||
+			!this.isUsingRecklessAttack(ctx)
+		)
+			return base;
 		return [
-			...super.getDamageRollModifiers(ctx),
+			...base,
 			{
 				source: "barbarian.berserker.frenzy",
 				damageRoll: {
-					bonusFns: [(damageCtx) => this.getFrenzyDamageBonus(damageCtx)],
+					componentFns: [
+						() => [
+							{
+								id: "barbarian.berserker.frenzy",
+								source: "barbarian.berserker.frenzy",
+								origin: "class",
+								damageType: ctx.weapon?.damageType ?? "bludgeoning",
+								dice: Array<number>(this.getRageDamageBonus(character.level)).fill(6),
+								flatBonus: 0,
+								doublesOnCrit: true,
+							},
+						],
+					],
 				},
 			},
 		];
 	}
 }
-
 export default Berserker;

@@ -1,4 +1,6 @@
 import type BaseClass from "../classes/BaseClass.ts";
+import { resolveFeatSelections } from "../feats/FeatSelection.ts";
+import type { FeatSelection, ValidatedFeatSelection } from "../feats/FeatTypes.ts";
 import type Weapon from "../Items/Weapon.ts";
 import type { TConditionName, TConditionState } from "../modifiers/Conditions.ts";
 
@@ -34,6 +36,8 @@ class BaseCharacter {
 	armorClass: number;
 	hitPoints: number;
 	conditions: TConditionState[];
+	speed: number = 30;
+	readonly feats: readonly ValidatedFeatSelection[];
 
 	constructor(
 		level: number,
@@ -43,15 +47,31 @@ class BaseCharacter {
 		stats: TStatBlock = defaultStatBlock,
 		armorClass: number = 16,
 		hitPoints: number = 1,
+		feats: readonly FeatSelection[] = [],
 	) {
 		this.level = level;
 		this.characterClass = characterClass;
 		this.weapon = weapon;
 		this.weaponPrimaryStat = weaponPrimaryStat;
-		this.stats = stats;
+		const resolved = resolveFeatSelections({ level, stats, feats });
+		this.stats = resolved.stats;
 		this.armorClass = armorClass;
 		this.hitPoints = hitPoints;
 		this.conditions = [];
+		this.feats = Object.freeze(
+			resolved.feats.map((feat) =>
+				Object.freeze({
+					...feat,
+					...(feat.abilityScoreImprovement === undefined
+						? {}
+						: {
+								abilityScoreImprovement: Object.freeze(
+									feat.abilityScoreImprovement.map((choice) => Object.freeze(choice)),
+								),
+							}),
+				}),
+			),
+		);
 	}
 
 	getProficiencyBonus(): number {

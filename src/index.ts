@@ -1,75 +1,23 @@
-import BaseCharacter from "./character/BaseCharacter.ts";
-import Barbarian from "./classes/Barbarian.ts";
-import Dice from "./dice/dice.ts";
-import Weapon from "./Items/Weapon.ts";
+import { createFiveFeatScenario } from "./scenarios/FiveFeats.ts";
 
-const d12 = new Dice(12);
-const d6 = new Dice(6);
-
-const dualSword = new Weapon("dualSword", "", "dual", "rare", 100, 300, "big", [d12], "hex");
-
-const heavySword = new Weapon("heavySword", "", "dual", "rare", 100, 300, "big", [d6, d6], "hex");
-
-const barb = new Barbarian([dualSword, heavySword]);
-
-const stats = {
-	strength: 18,
-	dexterity: 10,
-	constitution: 10,
-	intelligence: 10,
-	wisdom: 10,
-	charisma: 10,
-};
-
-const listOfCharactersDualSword = Array.from(
-	{ length: 20 },
-	(_, index) => new BaseCharacter(index + 1, barb, dualSword, "strength", stats),
+const scenario = createFiveFeatScenario();
+const result = scenario.run();
+console.log(
+	JSON.stringify(
+		{
+			scenario: "Synthetic Heavy Slashing 2d6 + Piercing d8; five base-2024 feats",
+			ruleset: "D&D 2024 base; no supplements",
+			randomness: "fixed deterministic sequence",
+			strength: { before: scenario.baseStats.strength, after: scenario.character.stats.strength },
+			feats: scenario.character.feats,
+			attack: result,
+			targets: [scenario.encounter.snapshot("first"), scenario.encounter.snapshot("second")],
+			effects: scenario.encounter.effectsOn("first"),
+			bonusActionAvailable: scenario.encounter.turn.bonusActionAvailable,
+			remainingFixedRolls: scenario.roller.remaining,
+		},
+		null,
+		2,
+	),
 );
-const listOfCharactersHeavySword = Array.from(
-	{ length: 20 },
-	(_, index) => new BaseCharacter(index + 1, barb, heavySword, "strength", stats),
-);
-
-for (const character of listOfCharactersDualSword) {
-	const damage = [];
-	for (let i = 0; i < 1000; i++) {
-		damage.push(character.attack());
-	}
-	console.log(`${character._level} avg damage ${damage.reduce((acc, damage) => acc + damage, 0) / 1000}`);
-}
-
-for (const character of listOfCharactersHeavySword) {
-	const damage = [];
-	for (let i = 0; i < 1000; i++) {
-		damage.push(character.attack());
-	}
-	console.log(`${character._level} avg damage ${damage.reduce((acc, damage) => acc + damage, 0) / 1000}`);
-}
-
-// const Jhon = new BaseCharacter(1, barb, heavySword, 'strength', {
-//     strength: 18,
-//     dexterity: 10,
-//     constitution: 10,
-//     intelligence: 10,
-//     wisdom: 10,
-//     charisma: 10
-// })
-// const Emual = new BaseCharacter(20, barb, heavySword, 'dexterity', {
-//     strength: 10,
-//     dexterity: 18,
-//     constitution: 10,
-//     intelligence: 10,
-//     wisdom: 10,
-//     charisma: 10
-// })
-
-// const jhonDamage = []
-// const emualDamage = []
-
-// for (let i = 0; i < 10000; i++) {
-//     jhonDamage.push(Jhon.attack().damage)
-//     emualDamage.push(Emual.attack().damage)
-// }
-
-// console.log('Jhon avg damage ', jhonDamage.reduce((acc,damage) => acc + damage, 0)/10000)
-// console.log('Emual avg damage', emualDamage.reduce((acc, damage) => acc + damage, 0)/10000)
+scenario.encounter.endTurn();
