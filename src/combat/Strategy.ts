@@ -5,6 +5,7 @@ import type {
 	FeatureActionChoice,
 	FeatureSnapshot,
 	TargetSnapshot,
+	UnarmedEffectSelection,
 } from "./CombatTypes.ts";
 import type { DamagePool, RolledDamageDie } from "./DamageTypes.ts";
 
@@ -23,6 +24,7 @@ export interface CombatStrategy {
 	choosePiercerCriticalDie(snapshot: Readonly<AttackSnapshot>, dice: readonly RolledDamageDie[]): string;
 	chooseHewTarget(snapshot: Readonly<AttackSnapshot>, targets: readonly TargetSnapshot[]): string | null;
 	chooseCleaveTarget(snapshot: Readonly<AttackSnapshot>, targets: readonly TargetSnapshot[]): string | null;
+	chooseUnarmedEffect(snapshot: Readonly<ActionSnapshot>, candidates: readonly UnarmedEffectSelection[]): number | null;
 	chooseNextAttack(snapshot: Readonly<ActionSnapshot>, candidates: readonly AttackSelection[]): number | null;
 	orderTriggers(snapshot: Readonly<AttackSnapshot>, ids: readonly string[]): readonly string[];
 }
@@ -36,7 +38,9 @@ export function poolTotal(pool: DamagePool): number {
 export const defaultStrategy: CombatStrategy = {
 	useOptionalFeature: () => true,
 	chooseFeatureOption: (_snapshot, _featureId, candidates) => candidates[0] ?? null,
-	chooseFeatureAction: (_snapshot, candidates) => candidates[0]?.id ?? null,
+	chooseFeatureAction: (_snapshot, candidates) =>
+		candidates.find((candidate) => candidate.purpose !== "end")?.id ?? null,
+	chooseUnarmedEffect: () => null,
 	useFeature: () => true,
 	chooseWeaponRoll: (_snapshot, candidates) => {
 		let bestIndex = 0;

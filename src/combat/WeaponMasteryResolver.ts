@@ -17,7 +17,7 @@ export function hasWeaponMastery(encounter: EncounterState, actorId: string, wea
 		actor instanceof BaseCharacter &&
 		((actor.characterClass.canUseWeaponMastery(weapon) &&
 			encounter.masteredWeaponNames(actorId).some((name) => name === weapon.name || name === weapon.id)) ||
-			actor.buildData?.featMasteredWeaponIds.some((id) => id === weapon.id) === true)
+			actor.feats.some((feat) => feat.name === "weapon-master" && feat.choices?.weaponMastery === weapon.id))
 	);
 }
 

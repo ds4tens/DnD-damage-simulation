@@ -18,7 +18,7 @@ export function validateMasterySelections(encounter: EncounterState, actorId: st
 		return;
 	}
 	const allowed = actor.characterClass.getWeaponMasteryCount(actor.level);
-	if (selections.length > allowed) throw new Error("Too many selected Weapon Mastery types");
+	let classSelectionCount = 0;
 	const selectedTypes = new Set<string>();
 	for (const name of selections) {
 		const weapon =
@@ -27,8 +27,15 @@ export function validateMasterySelections(encounter: EncounterState, actorId: st
 		if (!weapon || !weapon.weaponMastery) throw new Error(`Unknown Weapon Mastery selection: ${name}`);
 		if (selectedTypes.has(weapon.id)) throw new Error("Duplicate Weapon Mastery selection");
 		selectedTypes.add(weapon.id);
-		if (!actor.characterClass.canUseWeaponMastery(weapon))
-			throw new Error(`Weapon Mastery unavailable: ${weapon.name}`);
+		const featMastered = actor.feats.some(
+			(feat) => feat.name === "weapon-master" && feat.choices?.weaponMastery === weapon.id,
+		);
+		if (!featMastered) {
+			classSelectionCount++;
+			if (classSelectionCount > allowed) throw new Error("Too many selected Weapon Mastery types");
+			if (!actor.characterClass.canUseWeaponMastery(weapon))
+				throw new Error(`Weapon Mastery unavailable: ${weapon.name}`);
+		}
 		if (!actor.characterClass.isProficientWithWeapon(weapon))
 			throw new Error(`Weapon Mastery selection requires proficiency: ${weapon.name}`);
 	}
@@ -183,6 +190,12 @@ export function prepareWeaponAttack(encounter: EncounterState, request: AttackRe
 				: 0
 			: actor.getProficiencyBonus();
 	const attackModifiers: TCombatModifier[] = [];
+	if (
+		actor instanceof BaseCharacter &&
+		!actor.armorTrained &&
+		(attackAbility === "strength" || attackAbility === "dexterity")
+	)
+		attackModifiers.push({ source: "armor.untrained", attackRoll: { disadvantage: 1 } });
 	if (weapon.properties.includes("heavy") && actor.stats[weapon.category === "melee" ? "strength" : "dexterity"] < 13)
 		attackModifiers.push({ source: "weapon.heavy", attackRoll: { disadvantage: 1 } });
 	if (

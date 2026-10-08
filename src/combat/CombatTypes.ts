@@ -105,8 +105,29 @@ export type AttackResult = {
 	additionalDamage?: readonly DamageResult[];
 };
 export type CombatDamageEvent = { actorId: string; targetId: string; source: string; result: DamageResult };
-export type AttackActionOptions = { mode?: AttackMode; weapon?: Weapon; distance?: number; unarmed?: boolean };
-export type AttackActionResult = { totalDamage: number; attacks: readonly AttackResult[] };
+export type UnarmedEffectSelection = { targetId: string; effect: "grapple" | "shove-prone" };
+export type UnarmedEffectResult = UnarmedEffectSelection & {
+	effectId: string;
+	actorId: string;
+	turnId: number;
+	actionId: string;
+	attackIndexInTurn: number;
+	savingThrow: SavingThrowResult;
+	applied: boolean;
+	handReserved?: "left" | "right";
+};
+export type AttackActionOptions = {
+	mode?: AttackMode;
+	weapon?: Weapon;
+	distance?: number;
+	unarmed?: boolean;
+	unarmedEffects?: boolean;
+};
+export type AttackActionResult = {
+	totalDamage: number;
+	attacks: readonly AttackResult[];
+	unarmedEffects?: readonly UnarmedEffectResult[];
+};
 export type TurnStartResult = { ownerId: string; turnId: number; roundNumber: number; deathSave?: DeathSaveResult };
 export type DecisionRecord = { feature: string; choice: boolean | string | null; candidates?: readonly DamagePool[] };
 export type TargetSnapshot = {
@@ -159,7 +180,12 @@ export type FeatureSnapshot = {
 	roll?: Readonly<{ sides: number; value: number; kind: RollKind }>;
 	savingThrow?: Readonly<SavingThrowResult>;
 };
-export type FeatureActionChoice = { id: string; cost: "action" | "bonus-action" | "none"; targetId?: string };
+export type FeatureActionChoice = {
+	id: string;
+	cost: "action" | "bonus-action" | "none";
+	targetId?: string;
+	purpose?: "end";
+};
 export type FeatureAction = FeatureActionChoice & {
 	/** These callbacks are trusted rules; candidates expose only detached metadata. */
 	validate?: (ctx: FeatureActionContext) => boolean;
@@ -223,6 +249,7 @@ export type AttackContext = {
 	decisions: DecisionRecord[];
 	featureSelections: Record<string, string | boolean>;
 	isOwnTurn: boolean;
+	distanceTo(targetId: string): number | undefined;
 	canSee?: (observerId: string, targetId: string) => boolean;
 	hasUsed(featureId: string): boolean;
 	markUsed(featureId: string): void;

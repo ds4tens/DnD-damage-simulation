@@ -397,6 +397,10 @@ export class EncounterState {
 		this.definition(id);
 		return freezeSnapshot(structuredClone(this.effects.filter((effect) => effect.targetId === id)));
 	}
+	expireTimedEffects(): void {
+		if (this.hasActiveTurn) throw new Error("Cannot expire all timed effects during an active turn");
+		this.effects.length = 0;
+	}
 	effectiveSpeed(id: string): number {
 		const conditions = this.state(id).conditions;
 		if (

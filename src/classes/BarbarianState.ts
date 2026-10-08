@@ -1,7 +1,7 @@
 import type { CombatantState } from "../combat/EncounterState.ts";
 
 export type BarbarianCombatState = {
-	rage?: { expiresOwnTurn: number; maximumOwnTurn: number; persistent: boolean; idleSeconds: number };
+	rage?: { expiresOwnTurn: number; maximumOwnTurn: number; persistent: boolean };
 	recklessExpiresOwnTurn?: number;
 	wildHeartPower?: "falcon" | "lion" | "ram";
 };

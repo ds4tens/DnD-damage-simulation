@@ -54,6 +54,7 @@ function fixture(weapon: Weapon, options: { selected?: boolean; strength?: numbe
 		decisions: [],
 		featureSelections: {},
 		isOwnTurn: true,
+		distanceTo: () => undefined,
 		hasUsed: (feature) => encounter.hasUsed("hero", feature),
 		markUsed: (feature) => encounter.markUsed("hero", feature),
 		useFeature: () => options.use ?? true,

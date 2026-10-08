@@ -27,6 +27,9 @@ class BaseClass {
 	getMeleeReachBonus(_level: number, _weapon: Weapon, _isOwnTurn: boolean): number {
 		return 0;
 	}
+	getInitiativeAdvantage(_level: number): boolean {
+		return false;
+	}
 	getAttackCount(_level: number): number {
 		return 1;
 	}

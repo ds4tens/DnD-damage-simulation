@@ -63,7 +63,9 @@ export function rollInitiative(
 						(actor instanceof BaseCharacter && actor.feats.some((feat) => feat.name === "alert")
 							? actor.getProficiencyBonus()
 							: 0),
-					advantage: conditions.some((condition) => condition.name === "invisible"),
+					advantage:
+						conditions.some((condition) => condition.name === "invisible") ||
+						(actor instanceof BaseCharacter && actor.characterClass.getInitiativeAdvantage(actor.level)),
 					disadvantage:
 						surprised.has(id) ||
 						conditions.some((condition) =>

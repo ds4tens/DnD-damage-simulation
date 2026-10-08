@@ -152,7 +152,7 @@ test("trusted grapple selects target's better save, reserves a hand and blocks s
 });
 
 test("explicit ammunition is spent on miss and neither rest nor a new attack replenishes it", () => {
-	const f = fixture(LightCrossbow, [1], [], {
+	const f = fixture(LightCrossbow, [1, 1], [], {
 		buildData: {
 			species: { id: "dwarf" },
 			size: "medium",

@@ -506,7 +506,7 @@ test("Zealot Divine Fury keeps chosen type, flat level bonus and injected critic
 	assert.deepEqual(result.damage?.byType, { piercing: 8, necrotic: 8 });
 	assert.equal(f.roller.remaining, 0);
 });
-test("invalid feats fail; unsupported Push and partial classes report structured limitations", () => {
+test("invalid feats fail; unsupported changing-position and defensive features report structured limitations", () => {
 	assert.throws(
 		() =>
 			new BaseCharacter(4, new TestAttackClass([weapon]), weapon, "strength", character().stats, 16, 50, [
@@ -536,7 +536,11 @@ test("invalid feats fail; unsupported Push and partial classes report structured
 	});
 	assert.ok(result.limitations.some((limitation) => limitation.includes("Push")));
 	const ram = fixture([10, 1], { class: new WildHeart([weapon]), level: 1 });
-	assert.ok(ram.engine.resolveSingleAttack(ram.request).limitations.includes("Wild Heart Ram"));
+	assert.ok(
+		ram.engine
+			.resolveSingleAttack(ram.request)
+			.limitations.some((limitation) => limitation.includes("Animal/Nature Speaker")),
+	);
 });
 test("incapacitated actors cannot spend bonus actions or resolve attacks", () => {
 	const f = fixture([]);
