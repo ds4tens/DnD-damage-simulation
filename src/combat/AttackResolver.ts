@@ -6,7 +6,12 @@ import { weaponMasteryRegistry } from "../Items/Weapon/WeaponMastery.ts";
 import type Weapon from "../Items/Weapon.ts";
 import { conditionRegistry } from "../modifiers/Conditions.ts";
 import { mergeCombatModifiers, type TCombatModifier } from "../modifiers/Modifiers.ts";
-import { type PersistentCombatantState, type RecoveryEvent, recoverResources } from "./CombatResources.ts";
+import {
+	type CompleteRestResult,
+	type PersistentCombatantState,
+	type RecoveryEvent,
+	recoverResources,
+} from "./CombatResources.ts";
 import type {
 	AttackActionHandle,
 	AttackActionOptions,
@@ -87,6 +92,12 @@ export function collectAttackConditionModifiers(ctx: AttackContext): TCombatModi
 			return distance !== undefined && distance <= 5 && (ctx.canSee?.(id, ctx.request.actorId) ?? true);
 		});
 	return [
+		...(ctx.character &&
+		ctx.character.armorCategory !== "none" &&
+		!ctx.character.armorTrained &&
+		(ctx.attackAbility === "strength" || ctx.attackAbility === "dexterity")
+			? [{ source: "armor.untrained", attackRoll: { disadvantage: 1 } }]
+			: []),
 		...(nearbyEnemy ? [{ source: "attack.ranged-nearby-enemy", attackRoll: { disadvantage: 1 } }] : []),
 		...ctx.actorState.conditions.flatMap(
 			(condition) => conditionRegistry[condition.name].getOutgoingAttackModifiers?.(condition, ctx) ?? [],
@@ -546,6 +557,35 @@ export class CombatEngine {
 		if (this.encounter.hasActiveTurn) throw new Error("Recovery requires no active turn");
 		return recoverResources(this.encounter, actorId, event);
 	}
+	/** Completed rest event: no duration/interruption or Hit Dice healing simulation. */
+	completeRest(actorId: string, event: RecoveryEvent): CompleteRestResult {
+		if (this.encounter.hasActiveTurn || !["short-rest", "long-rest"].includes(event))
+			throw new Error("Invalid completed rest event");
+		const state = this.encounter.state(actorId);
+		if (state.lifeState === "dead" || state.hitPoints < 1)
+			throw new Error("A completed rest requires a living participant with at least 1 HP");
+		const previousHp = state.hitPoints;
+		const previousTemporaryHp = state.temporaryHp;
+		const resources = this.recoverResources(actorId, event);
+		endRage(state);
+		if (state.barbarian) delete state.barbarian.recklessExpiresOwnTurn;
+		if (event === "long-rest") {
+			heal(this.encounter, actorId, this.encounter.definition(actorId).hitPoints);
+			state.temporaryHp = 0;
+		}
+		return freezeSnapshot({
+			actorId,
+			event,
+			resources,
+			health: {
+				previousHp,
+				currentHp: state.hitPoints,
+				previousTemporaryHp,
+				currentTemporaryHp: state.temporaryHp,
+				hpRegained: state.hitPoints - previousHp,
+			},
+		});
+	}
 	advanceElapsedTime(minutes: number): void {
 		if (this.encounter.hasActiveTurn || !Number.isFinite(minutes) || minutes < 0 || (minutes > 0 && minutes < 10))
 			throw new Error("Elapsed time requires no active turn and a gap of at least 10 minutes");
@@ -774,6 +814,7 @@ export class CombatEngine {
 			request.ability,
 			request.grip,
 			request.equip,
+			request.equipAdditional,
 		]);
 	}
 	private validateAttack(request: AttackRequest): void {
@@ -781,6 +822,8 @@ export class CombatEngine {
 		if (!["melee", "ranged", "thrown"].includes(request.mode)) throw new Error("Invalid attack mode");
 		if (!this.isAttackLegal(request)) throw new Error("Illegal attack request");
 		if (!this.canAct(request.actorId)) throw new Error("Actor cannot take actions");
+		if (request.equipAdditional && !request.weapon && !request.weaponInstanceId)
+			throw new Error("Quick Draw requires a physical weapon attack");
 		if (request.profile) {
 			if (!Number.isFinite(request.profile.attackBonus) || !Array.isArray(request.profile.damage))
 				throw new Error("Invalid attack profile");
@@ -1027,6 +1070,20 @@ export class CombatEngine {
 					rollDamageComponents(components, false, this.actorRoller(request.actorId, "damage")),
 					components.map((component) => component.source).join("+"),
 				),
+			dealAttackRiderDamage: (targetId, components) => {
+				if (!ctx.hit?.isHit || !ctx.primaryDamage || ctx.primaryDamage.appliedDamage <= 0)
+					throw new Error("Attack rider requires a damaging primary hit");
+				let pool = rollDamageComponents(components, ctx.hit.isCrit, ctx.damageRoller);
+				for (const hook of this.activeHooks(ctx)) pool = hook.afterDamageRoll?.({ ...ctx, hit: ctx.hit }, pool) ?? pool;
+				validateDamagePool(pool);
+				return this.damage(
+					request.actorId,
+					targetId,
+					pool,
+					components.map((component) => component.source).join("+"),
+					ctx.hit.isCrit,
+				);
+			},
 			d20Mode: (first, mode) =>
 				this.modifyD20Mode(
 					request.actorId,
@@ -1186,6 +1243,12 @@ export class CombatEngine {
 			additionalDamage.push(result);
 			return result;
 		};
+		const originalRiderDamage = ctx.dealAttackRiderDamage;
+		ctx.dealAttackRiderDamage = (targetId, components) => {
+			const result = originalRiderDamage(targetId, components);
+			additionalDamage.push(result);
+			return result;
+		};
 		const originalResolveSavingThrow = ctx.resolveSavingThrow;
 		ctx.resolveSavingThrow = (request) => {
 			const result = originalResolveSavingThrow(request);
@@ -1251,6 +1314,7 @@ export class CombatEngine {
 			hit.isHit || pool.length > 0
 				? this.damage(request.actorId, request.targetId, pool, source, hit.isCrit)
 				: undefined;
+		if (damage) ctx.primaryDamage = damage;
 		if (hit.isHit) this.encounter.turn.hitActors.add(request.actorId);
 		const triggeredAttacks: AttackResult[] = [];
 		const result: AttackResult = {
@@ -1278,7 +1342,7 @@ export class CombatEngine {
 			additionalDamage,
 			savingThrows,
 		};
-		if (hit.isHit) for (const hook of hooks) hook.afterHitDamage?.(hitCtx, result);
+		if (hit.isHit) for (const hook of hooks) hook.afterHitDamage?.({ ...ctx, hit }, result);
 		const mastery = resolveMasteryHit(ctx, result, { save: (save) => this.resolveSavingThrow(save) });
 		for (const effect of mastery.effects ?? []) this.encounter.addEffect(effect);
 		for (const condition of mastery.addConditions ?? []) {
@@ -1553,6 +1617,44 @@ export class CombatEngine {
 						actionSource: origin === "light" ? "bonus-action" : "attack-action",
 						...(action ? { action, actionId: action.id } : {}),
 					};
+					if (origin === "primary" && instance.weapon.properties.includes("light")) {
+						const other = inventory.find(
+							(item) =>
+								item.id !== instance.id &&
+								!item.weapon.properties.includes("two-handed") &&
+								!this.encounter.state(actorId).spentWeaponInstanceIds.has(item.id) &&
+								hands.left !== item.id &&
+								hands.right !== item.id,
+						);
+						if (other) {
+							const preparedChoice: AttackSelection = { ...selection };
+							if (
+								selection.equip &&
+								hands.left === null &&
+								hands.right === null &&
+								actor instanceof BaseCharacter &&
+								actor.feats.some((feat) => feat.name === "dual-wielder")
+							)
+								preparedChoice.equipAdditional = {
+									kind: "draw",
+									when: "before",
+									weaponInstanceId: other.id,
+									hand: selection.equip.hand === "left" ? "right" : "left",
+								};
+							else if (!selection.equip && (hands.left === null || hands.right === null))
+								preparedChoice.equip = {
+									kind: "draw",
+									when: "before",
+									weaponInstanceId: other.id,
+									hand: hands.left === null ? "left" : "right",
+								};
+							if (
+								(preparedChoice.equipAdditional || preparedChoice.equip !== selection.equip) &&
+								this.isAttackLegal({ ...request, ...preparedChoice })
+							)
+								candidates.push(preparedChoice);
+						}
+					}
 					if (this.isAttackLegal(request)) candidates.push(selection);
 				}
 			}

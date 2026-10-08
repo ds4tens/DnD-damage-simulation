@@ -1,3 +1,4 @@
+import BaseCharacter from "../character/BaseCharacter.ts";
 import { abilityNames } from "../character/CombatantData.ts";
 import type { DiceRoller } from "../dice/RandomSource.ts";
 import { exhaustionPenalty, savingThrowConditionModifiers } from "../modifiers/Conditions.ts";
@@ -26,6 +27,11 @@ export function resolveSavingThrow(
 		throw new Error("Invalid saving throw request");
 	const modifiers = savingThrowConditionModifiers(conditions, request.ability);
 	const effectDisadvantage = encounter.effectsOn(request.targetId).some((effect) => effect.savingThrowDisadvantage);
+	const armorDisadvantage =
+		definition instanceof BaseCharacter &&
+		definition.armorCategory !== "none" &&
+		!definition.armorTrained &&
+		(request.ability === "strength" || request.ability === "dexterity");
 	const bonus = definition.getSavingThrowBonus(request.ability) + (request.bonus ?? 0) + exhaustionPenalty(conditions);
 	const base = { targetId: request.targetId, ability: request.ability, dc: request.dc, source: request.source, bonus };
 	encounter.consumeSavingThrowEffects(request.targetId);
@@ -41,7 +47,7 @@ export function resolveSavingThrow(
 	const rolls = rollD20Test(
 		roller,
 		request.advantage ?? false,
-		(request.disadvantage ?? false) || modifiers.disadvantage || effectDisadvantage,
+		(request.disadvantage ?? false) || modifiers.disadvantage || effectDisadvantage || armorDisadvantage,
 		modifyMode,
 	);
 	const total = rolls.natural + bonus;

@@ -15,7 +15,7 @@ class ExtraAttackClass extends BaseClass {
 		return 2;
 	}
 }
-function fixture(extraAttack = false, optIn = true) {
+function fixture(extraAttack = false, optIn = true, rolls = [10, 2, 10, 2, 10, 2, 10, 2]) {
 	const weapon = new Weapon("Budget weapon", "", "simple", "common", 1, 1, "medium", [new Dice(6)], "piercing");
 	const actor = new BaseCharacter(
 		4,
@@ -30,7 +30,7 @@ function fixture(extraAttack = false, optIn = true) {
 		{ id: "actor", definition: actor },
 		{ id: "target", definition: new BaseMonster("Target", 10, 100) },
 	]);
-	const roller = new FixedDiceRoller([10, 2, 10, 2, 10, 2, 10, 2]);
+	const roller = new FixedDiceRoller(rolls);
 	const engine = new CombatEngine(encounter, { roller, allowScenarioReactions: optIn });
 	engine.beginTurn("actor");
 	const request: AttackRequest = {
@@ -98,9 +98,8 @@ test("illegal initial and continued attacks fail before costs, effects or dice",
 	assert.equal(f.encounter.effectsOn("actor").length, 1);
 });
 test("a miss spends an Attack-action credit", () => {
-	const f = fixture();
-	const engine = new CombatEngine(f.encounter, { roller: new FixedDiceRoller([1]) });
-	assert.equal(engine.resolveSingleAttack(f.request).hit.isHit, false);
+	const f = fixture(false, true, [1]);
+	assert.equal(f.engine.resolveSingleAttack(f.request).hit.isHit, false);
 	assert.equal(f.encounter.turn.actionAvailable, false);
 });
 test("Reaction needs explicit scenario opt-in and an issued unforgeable trigger grant", () => {

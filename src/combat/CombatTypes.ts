@@ -71,6 +71,8 @@ export type AttackRequest = {
 	mode: AttackMode;
 	weapon?: Weapon;
 	distance?: number;
+	/** Dual Wielder Quick Draw: second physical weapon operation in the same timing window. */
+	equipAdditional?: NonNullable<AttackRequest["equip"]>;
 	/** Explicit profile for monsters, Unarmed Strikes and test/scenario contributions. */
 	profile?: { attackBonus: number; damage: readonly DamageComponent[] };
 };
@@ -246,6 +248,7 @@ export type AttackContext = {
 	hasHitOccurredThisTurn: boolean;
 	distance?: number;
 	hit?: HitResult;
+	primaryDamage?: DamageResult;
 	decisions: DecisionRecord[];
 	featureSelections: Record<string, string | boolean>;
 	isOwnTurn: boolean;
@@ -259,6 +262,8 @@ export type AttackContext = {
 	/** Trusted Unarmed Damage+Grapple rules; undefined means the size/hand requirements fail. */
 	resolveGrapple(targetId: string): SavingThrowResult | undefined;
 	dealDamage(targetId: string, components: readonly DamageComponent[]): DamageResult;
+	/** Same-attack post-primary rider: critical copies and attack-wide reroll window, no weapon-only rerolls. */
+	dealAttackRiderDamage(targetId: string, components: readonly DamageComponent[]): DamageResult;
 	d20Mode(
 		first: number,
 		mode: { advantage: boolean; disadvantage: boolean },

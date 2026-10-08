@@ -68,6 +68,7 @@ export function rollInitiative(
 						(actor instanceof BaseCharacter && actor.characterClass.getInitiativeAdvantage(actor.level)),
 					disadvantage:
 						surprised.has(id) ||
+						(actor instanceof BaseCharacter && actor.armorCategory !== "none" && !actor.armorTrained) ||
 						conditions.some((condition) =>
 							["incapacitated", "paralyzed", "stunned", "unconscious"].includes(condition.name),
 						),

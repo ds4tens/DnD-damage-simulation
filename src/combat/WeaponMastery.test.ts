@@ -61,6 +61,8 @@ function fixture(weapon: Weapon, options: { selected?: boolean; strength?: numbe
 		chooseOption: (_feature, candidates) => candidates[0] ?? null,
 		resolveSavingThrow: (request) => resolveSavingThrow(encounter, request, roller),
 		resolveGrapple: () => undefined,
+		dealAttackRiderDamage: (targetId, components) =>
+			resolveDamage(encounter, targetId, rollDamageComponents(components, false, roller)),
 		dealDamage: (targetId, components) =>
 			resolveDamage(encounter, targetId, rollDamageComponents(components, false, roller)),
 		d20Mode: (_first, mode) => mode,

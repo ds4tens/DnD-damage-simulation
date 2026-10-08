@@ -9,6 +9,18 @@ export type ResourceDefinition = {
 	/** Defaults to maxUses; e.g. Heroic Inspiration starts empty. */
 	initialUses?: number;
 };
+export type CompleteRestResult = {
+	actorId: string;
+	event: RecoveryEvent;
+	resources: readonly ResourceChange[];
+	health: {
+		previousHp: number;
+		currentHp: number;
+		previousTemporaryHp: number;
+		currentTemporaryHp: number;
+		hpRegained: number;
+	};
+};
 export type ResourcePool = { definition: Readonly<ResourceDefinition>; remaining: number };
 export type PersistentResourceSnapshot = Readonly<Record<string, number>>;
 export type ResourceChange = { resourceId: string; previous: number; current: number };

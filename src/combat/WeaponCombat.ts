@@ -114,6 +114,24 @@ export function prepareWeaponAttack(encounter: EncounterState, request: AttackRe
 	if (weapon.ammunitionKind && state.resources[`ammunition.${weapon.ammunitionKind}`]?.remaining === 0)
 		throw new Error("No ammunition available");
 	if (state.spentWeaponInstanceIds.has(instance.id)) throw new Error("Weapon instance has already been thrown");
+	if (request.equipAdditional) {
+		if (
+			!request.equip ||
+			request.equipAdditional.when !== request.equip.when ||
+			request.equipAdditional.weaponInstanceId === request.equip.weaponInstanceId ||
+			!(actor instanceof BaseCharacter) ||
+			!actor.feats.some((feat) => feat.name === "dual-wielder")
+		)
+			throw new Error("Additional weapon equip operation requires Dual Wielder Quick Draw");
+		for (const operation of [request.equip, request.equipAdditional]) {
+			if (
+				!["before", "after"].includes(operation.when) ||
+				!["left", "right", "both"].includes(operation.hand) ||
+				encounter.weaponInstance(request.actorId, operation.weaponInstanceId).weapon.properties.includes("two-handed")
+			)
+				throw new Error("Quick Draw requires two weapons without Two-Handed in one timing window");
+		}
+	}
 	const hands = { ...state.hands };
 	let manipulationCost = 0;
 	const isThrown = request.mode === "thrown" || (request.mode === "ranged" && weapon.properties.includes("thrown"));
@@ -129,7 +147,10 @@ export function prepareWeaponAttack(encounter: EncounterState, request: AttackRe
 		if (request.actionSource !== "attack-action" && !freeThrownDraw)
 			throw new Error("Weapon equip operation requires an Attack-action attack");
 		manipulationCost = freeThrownDraw ? 0 : 1;
-		if (request.equip.when === "before") applyEquip(encounter, request.actorId, hands, request.equip);
+		if (request.equip.when === "before") {
+			applyEquip(encounter, request.actorId, hands, request.equip);
+			if (request.equipAdditional) applyEquip(encounter, request.actorId, hands, request.equipAdditional);
+		}
 	}
 	if (request.mode === "melee" && weapon.category !== "melee") throw new Error("Not a melee weapon");
 	if (request.mode === "ranged" && weapon.category !== "ranged")
@@ -190,12 +211,6 @@ export function prepareWeaponAttack(encounter: EncounterState, request: AttackRe
 				: 0
 			: actor.getProficiencyBonus();
 	const attackModifiers: TCombatModifier[] = [];
-	if (
-		actor instanceof BaseCharacter &&
-		!actor.armorTrained &&
-		(attackAbility === "strength" || attackAbility === "dexterity")
-	)
-		attackModifiers.push({ source: "armor.untrained", attackRoll: { disadvantage: 1 } });
 	if (weapon.properties.includes("heavy") && actor.stats[weapon.category === "melee" ? "strength" : "dexterity"] < 13)
 		attackModifiers.push({ source: "weapon.heavy", attackRoll: { disadvantage: 1 } });
 	if (
@@ -222,12 +237,19 @@ export function prepareWeaponAttack(encounter: EncounterState, request: AttackRe
 		loadingKey = JSON.stringify([request.actorId, request.actionId, instance.id]);
 	}
 	if (isThrown) {
-		if (request.equip?.when === "after" && request.equip.weaponInstanceId === instance.id)
+		if (
+			[request.equip, request.equipAdditional].some(
+				(operation) => operation?.when === "after" && operation.weaponInstanceId === instance.id,
+			)
+		)
 			throw new Error("A thrown instance is no longer available for an after-attack equip operation");
 		if (hands.left === instance.id) hands.left = null;
 		if (hands.right === instance.id) hands.right = null;
 	}
-	if (request.equip?.when === "after") applyEquip(encounter, request.actorId, hands, request.equip);
+	if (request.equip?.when === "after") {
+		applyEquip(encounter, request.actorId, hands, request.equip);
+		if (request.equipAdditional) applyEquip(encounter, request.actorId, hands, request.equipAdditional);
+	}
 	return {
 		instance,
 		attackAbility,
