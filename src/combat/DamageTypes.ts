@@ -1,5 +1,21 @@
 import type { DeathSaveState, LifeState } from "./HitPointTypes.ts";
 
+export const damageTypes = [
+	"acid",
+	"bludgeoning",
+	"cold",
+	"fire",
+	"force",
+	"lightning",
+	"necrotic",
+	"piercing",
+	"poison",
+	"psychic",
+	"radiant",
+	"slashing",
+	"thunder",
+] as const;
+
 export type DamageType =
 	| "acid"
 	| "bludgeoning"

@@ -1,4 +1,4 @@
-import type { AttackSnapshot, TargetSnapshot } from "./CombatTypes.ts";
+import type { ActionSnapshot, AttackSelection, AttackSnapshot, TargetSnapshot } from "./CombatTypes.ts";
 import type { DamagePool, RolledDamageDie } from "./DamageTypes.ts";
 
 export interface CombatStrategy {
@@ -8,6 +8,9 @@ export interface CombatStrategy {
 	applyPiercerCritical(snapshot: Readonly<AttackSnapshot>): boolean;
 	choosePiercerCriticalDie(snapshot: Readonly<AttackSnapshot>, dice: readonly RolledDamageDie[]): string;
 	chooseHewTarget(snapshot: Readonly<AttackSnapshot>, targets: readonly TargetSnapshot[]): string | null;
+	chooseCleaveTarget(snapshot: Readonly<AttackSnapshot>, targets: readonly TargetSnapshot[]): string | null;
+	chooseNextAttack(snapshot: Readonly<ActionSnapshot>, candidates: readonly AttackSelection[]): number | null;
+	orderTriggers(snapshot: Readonly<AttackSnapshot>, ids: readonly string[]): readonly string[];
 }
 export function poolTotal(pool: DamagePool): number {
 	return pool.reduce(
@@ -50,6 +53,15 @@ export const defaultStrategy: CombatStrategy = {
 		return best.id;
 	},
 	chooseHewTarget: (_snapshot, targets) => targets.find((target) => target.hitPoints > 0)?.id ?? null,
+	chooseCleaveTarget: (_snapshot, targets) => targets.find((target) => target.hitPoints > 0)?.id ?? null,
+	chooseNextAttack: (snapshot, candidates) => {
+		const choice = candidates.findIndex((candidate) =>
+			snapshot.targets.some((target) => target.id === candidate.targetId && target.hitPoints > 0),
+		);
+		return choice < 0 ? null : choice;
+	},
+	orderTriggers: (_snapshot, ids) =>
+		[...ids].sort((left, right) => Number(right === "weaponMastery.cleave") - Number(left === "weaponMastery.cleave")),
 };
 
 export function freezeSnapshot<T>(value: T): Readonly<T> {

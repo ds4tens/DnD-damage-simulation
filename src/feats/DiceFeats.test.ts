@@ -62,12 +62,12 @@ function fixture(
 	const hooks = options.hooks ?? [savageAttackerHook, piercerHook];
 	const hero = new BaseCharacter(
 		4,
-		new TestAttackClass([weapon]),
+		new TestAttackClass([weapon, greatsword]),
 		weapon,
 		"strength",
 		{
 			strength: 16,
-			dexterity: 10,
+			dexterity: 16,
 			constitution: 10,
 			intelligence: 10,
 			wisdom: 10,
@@ -90,7 +90,15 @@ function fixture(
 		),
 	);
 	const encounter = new EncounterState([
-		{ id: "hero", definition: hero },
+		{
+			id: "hero",
+			definition: hero,
+			weapons: [
+				{ id: "main", weapon },
+				{ id: "other", weapon: greatsword },
+			],
+			initialHands: { left: "main", right: "other" },
+		},
 		{ id: "enemy", definition: new BaseMonster("Target", 10, 1000) },
 	]);
 	const roller = new FixedDiceRoller(rolls);

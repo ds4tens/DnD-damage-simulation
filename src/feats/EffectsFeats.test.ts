@@ -35,7 +35,7 @@ function hero(weapon: Weapon, feats: EFeatName[]) {
 		"strength",
 		{
 			strength: feats.includes(EFeatName.GREAT_WEAPON_MASTER) ? 17 : 18,
-			dexterity: 10,
+			dexterity: 18,
 			constitution: 10,
 			intelligence: 10,
 			wisdom: 10,
@@ -332,8 +332,12 @@ test("Hew excludes off-turn, spent Bonus Action, noncritical zero-HP target and 
 	for (const variant of ["off-turn", "spent", "zero", "ranged"] as const) {
 		let offers = 0;
 		const { encounter, engine, request } = fixture(variant === "zero" ? [d20(10), d10(1)] : [d20(20), d10(1), d10(1)], {
-			hp: variant === "zero" ? 0 : 100,
-			weapon: makeWeapon({ category: variant === "ranged" ? "ranged" : "melee" }),
+			hp: 100,
+			weapon: makeWeapon({
+				category: variant === "ranged" ? "ranged" : "melee",
+				...(variant === "zero" ? { reach: 10 } : {}),
+				...(variant === "ranged" ? { range: { normal: 80, long: 320 } } : {}),
+			}),
 			strategy: {
 				chooseHewTarget: () => {
 					offers++;
@@ -346,7 +350,12 @@ test("Hew excludes off-turn, spent Bonus Action, noncritical zero-HP target and 
 			engine.beginTurn("enemy");
 		}
 		if (variant === "spent") encounter.spendBonusAction("hero");
-		const selected = { ...request, distance: 1 };
+		if (variant === "zero") {
+			encounter.state("enemy").hitPoints = 0;
+			encounter.state("enemy").lifeState = "dying";
+			encounter.state("enemy").conditions.push({ name: "unconscious" }, { name: "prone" });
+		}
+		const selected = { ...request, distance: variant === "zero" ? 10 : 1 };
 		const result =
 			variant === "off-turn"
 				? engine.resolveSingleAttack({
@@ -360,8 +369,8 @@ test("Hew excludes off-turn, spent Bonus Action, noncritical zero-HP target and 
 	}
 });
 
-test("Hew uses Melee category for thrown attacks and validates fresh target geometry", () => {
-	const { engine, request, roller } = fixture([d20(20), d10(1), d10(1), d20(10), d10(1)], {
+test("thrown Melee weapons leave the hand and cannot be reused for Hew without retrieval", () => {
+	const { engine, request, roller } = fixture([d20(20), d10(1), d10(1)], {
 		weapon: makeWeapon({ category: "melee", properties: ["thrown"], range: { normal: 20, long: 60 } }),
 		strategy: {
 			chooseHewTarget: (_snapshot, targets) => {
@@ -374,7 +383,9 @@ test("Hew uses Melee category for thrown attacks and validates fresh target geom
 		},
 		distanceFor: (_actor, target) => (target === "far" ? 70 : 10),
 	});
-	assert.equal(engine.resolveSingleAttack({ ...request, mode: "thrown" }).triggeredAttacks.length, 1);
+	const thrown = engine.resolveSingleAttack({ ...request, mode: "thrown" });
+	assert.equal(thrown.weapon?.category, "melee");
+	assert.equal(thrown.triggeredAttacks.length, 0);
 	assert.equal(roller.remaining, 0);
 	const invalid = fixture([d20(20), d10(1), d10(1)], {
 		strategy: { chooseHewTarget: () => "far" },

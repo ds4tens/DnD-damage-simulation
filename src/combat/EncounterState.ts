@@ -2,6 +2,7 @@ import BaseCharacter from "../character/BaseCharacter.ts";
 import type { TConditionState } from "../modifiers/Conditions.ts";
 import type { CombatantDefinition, CombatantInput, HandState, TargetSnapshot, WeaponInstance } from "./CombatTypes.ts";
 import type { HpChangeEvent } from "./DamageTypes.ts";
+import { applyDamage, initializeHitPoints } from "./HitPointsResolver.ts";
 import type { DeathSaveState, LifeState, ZeroHpBehavior } from "./HitPointTypes.ts";
 
 export type EffectExpiry = { boundary: "start" | "end"; combatantId: string; turnOccurrence: number };
@@ -39,6 +40,7 @@ export type TurnState = {
 	used: Map<string, Set<string>>;
 	hitActors: Set<string>;
 	attackCounts: Map<string, number>;
+	loadingUsed: Set<string>;
 };
 export class EncounterState {
 	private readonly definitions = new Map<string, CombatantDefinition>();
@@ -76,7 +78,12 @@ export class EncounterState {
 			if (inventory.some((item) => !item.id) || new Set(inventory.map((item) => item.id)).size !== inventory.length)
 				throw new Error("Duplicate or empty weapon instance ID");
 			this.inventories.set(participant.id, inventory);
-			this.masteries.set(participant.id, Object.freeze([...(participant.masteredWeaponNames ?? [])]));
+			if (participant.masteredWeaponIds !== undefined && participant.masteredWeaponNames !== undefined)
+				throw new Error("Choose one Weapon Mastery selection format");
+			this.masteries.set(
+				participant.id,
+				Object.freeze([...(participant.masteredWeaponIds ?? participant.masteredWeaponNames ?? [])]),
+			);
 			const zeroHpBehavior =
 				participant.zeroHpBehavior ?? (definition instanceof BaseCharacter ? "death-saves" : "die");
 			this.zeroHpBehaviors.set(participant.id, zeroHpBehavior);
@@ -97,6 +104,13 @@ export class EncounterState {
 				classState: { ...(participant.initialClassState ?? {}) },
 			});
 		}
+		for (const id of this.ids) initializeHitPoints(this, id);
+	}
+	get hasActiveTurn(): boolean {
+		return this.currentTurn !== undefined;
+	}
+	get mode(): "manual" | "scheduled" | undefined {
+		return this.lifecycleMode;
 	}
 	weapons(actorId: string): readonly WeaponInstance[] {
 		this.definition(actorId);
@@ -162,6 +176,7 @@ export class EncounterState {
 			used: new Map(),
 			hitActors: new Set(),
 			attackCounts: new Map(),
+			loadingUsed: new Set(),
 		};
 		return this.currentTurn;
 	}
@@ -260,10 +275,23 @@ export class EncounterState {
 		return this.effects.filter((effect) => effect.targetId === id).map((effect) => Object.freeze({ ...effect }));
 	}
 	effectiveSpeed(id: string): number {
+		const conditions = this.state(id).conditions;
+		if (
+			this.state(id).lifeState === "dead" ||
+			conditions.some((condition) => ["grappled", "restrained", "paralyzed", "unconscious"].includes(condition.name))
+		)
+			return 0;
+		const exhaustion = Math.max(
+			0,
+			...conditions.filter((condition) => condition.name === "exhaustion").map((condition) => condition.level ?? 1),
+		);
 		const byKind = new Map<string, number>();
 		for (const effect of this.effectsOn(id))
 			byKind.set(effect.kind, Math.max(byKind.get(effect.kind) ?? 0, effect.speedReduction ?? 0));
-		return Math.max(0, this.definition(id).speed - [...byKind.values()].reduce((sum, reduction) => sum + reduction, 0));
+		return Math.max(
+			0,
+			this.definition(id).speed - 5 * exhaustion - [...byKind.values()].reduce((sum, reduction) => sum + reduction, 0),
+		);
 	}
 	hasAttackDisadvantage(id: string): boolean {
 		return this.effectsOn(id).some((effect) => effect.attackDisadvantage);
@@ -272,31 +300,15 @@ export class EncounterState {
 		return Object.freeze({
 			id,
 			armorClass: this.definition(id).armorClass,
+			conditions: Object.freeze(this.state(id).conditions.map((condition) => Object.freeze({ ...condition }))),
 			hitPoints: this.state(id).hitPoints,
 			speed: this.effectiveSpeed(id),
+			lifeState: this.state(id).lifeState,
+			temporaryHp: this.state(id).temporaryHp,
 		});
 	}
-	applyDamage(targetId: string, damage: number): HpChangeEvent {
-		if (!Number.isFinite(damage) || damage < 0) throw new Error("Damage must be finite and nonnegative");
-		const state = this.state(targetId);
-		const previousHp = state.hitPoints;
-		state.hitPoints = Math.max(0, previousHp - damage);
-		return {
-			targetId,
-			previousHp,
-			currentHp: state.hitPoints,
-			damageTaken: damage,
-			hpLost: previousHp - state.hitPoints,
-			reducedToZero: previousHp > 0 && state.hitPoints === 0,
-			previousTemporaryHp: state.temporaryHp,
-			currentTemporaryHp: state.temporaryHp,
-			temporaryHpLost: 0,
-			overflow: Math.max(0, damage - previousHp),
-			previousLifeState: state.lifeState,
-			currentLifeState: state.lifeState,
-			previousDeathSaves: { ...state.deathSaves },
-			currentDeathSaves: { ...state.deathSaves },
-		};
+	applyDamage(targetId: string, damage: number, options: { critical?: boolean } = {}): HpChangeEvent {
+		return applyDamage(this, targetId, damage, options);
 	}
 }
 

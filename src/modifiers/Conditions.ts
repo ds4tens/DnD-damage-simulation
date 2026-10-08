@@ -194,18 +194,24 @@ export const conditionRegistry: Record<TConditionName, TConditionRule> = {
 	 */
 	[EConditionName.INVISIBLE]: {
 		name: EConditionName.INVISIBLE,
-		getOutgoingAttackModifiers: () => [
-			{
-				source: "condition.invisible.outgoing",
-				attackRoll: { advantage: 1 },
-			},
-		],
-		getIncomingAttackModifiers: () => [
-			{
-				source: "condition.invisible.incoming",
-				attackRoll: { disadvantage: 1 },
-			},
-		],
+		getOutgoingAttackModifiers: (_condition, ctx) =>
+			ctx.canSee?.(ctx.request.targetId, ctx.request.actorId)
+				? []
+				: [
+						{
+							source: "condition.invisible.outgoing",
+							attackRoll: { advantage: 1 },
+						},
+					],
+		getIncomingAttackModifiers: (_condition, ctx) =>
+			ctx.canSee?.(ctx.request.actorId, ctx.request.targetId)
+				? []
+				: [
+						{
+							source: "condition.invisible.incoming",
+							attackRoll: { disadvantage: 1 },
+						},
+					],
 	},
 	/**
 	 * While you have the Incapacitated condition, you experience the following effects.

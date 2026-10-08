@@ -107,14 +107,18 @@ test("public engine automatically resolves all five feats: crit38, HP30→0, one
 	assert.equal(hew?.triggeredAttacks.length, 0);
 	assert.deepEqual(hew?.decisions, []);
 	assert.equal(f.encounter.canUseBonusAction("hero"), false);
-	assert.equal(f.encounter.effectiveSpeed("first"), 20);
+	assert.equal(f.encounter.effectiveSpeed("first"), 0);
+	assert.equal(
+		f.encounter.effectsOn("first").find((effect) => effect.kind === "slasher.hamstring")?.speedReduction,
+		10,
+	);
 	assert.equal(f.encounter.hasAttackDisadvantage("first"), true);
 	assert.equal(f.encounter.effectiveSpeed("second"), 30);
 	assert.equal(f.encounter.hasUsed("hero", "savage-attacker"), true);
 	assert.equal(f.encounter.hasUsed("hero", "piercer.puncture"), true);
 	assert.equal(f.encounter.hasUsed("hero", "slasher.hamstring"), true);
 	assert.equal(f.roller.remaining, 0);
-	assert.deepEqual(result.limitations, []);
+	assert.ok(result.limitations.some((limitation) => limitation.includes("Scenario supply")));
 });
 
 test("optional strategy declines all chosen benefits while mandatory Slasher critical still applies", () => {
@@ -179,10 +183,15 @@ test("effects expire only at next source turn and independent public scenario in
 	assert.deepEqual(second.encounter.effectsOn("first"), []);
 	first.engine.endTurn();
 	first.engine.beginTurn("second");
-	assert.equal(first.encounter.effectiveSpeed("first"), 20);
+	assert.equal(first.encounter.effectiveSpeed("first"), 0);
+	assert.equal(
+		first.encounter.effectsOn("first").find((effect) => effect.kind === "slasher.hamstring")?.speedReduction,
+		10,
+	);
 	first.engine.endTurn();
 	first.engine.beginTurn("hero");
-	assert.equal(first.encounter.effectiveSpeed("first"), 30);
+	assert.equal(first.encounter.effectiveSpeed("first"), 0);
+	assert.equal(first.encounter.effectsOn("first").length, 0);
 	assert.equal(first.encounter.hasAttackDisadvantage("first"), false);
 	assert.equal(first.encounter.hasUsed("hero", "savage-attacker"), false);
 	assert.equal(second.run().damage?.rolledDamage, 38);
