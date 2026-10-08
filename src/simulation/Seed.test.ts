@@ -14,6 +14,9 @@ const identity: SeedIdentity = {
 
 test("seed identity distinguishes trial, stream and tuple fields with stable UTF-8 encoding", () => {
 	const seed = deriveSeed(identity, "combat");
+	assert.equal(seed, 3225903504, "dpr-seeds-v1 pinned combat identity");
+	assert.equal(deriveSeed(identity, "environment"), 1238233920);
+	assert.equal(deriveSeed({ ...identity, buildId: "воин" }, "combat"), 2605287563);
 	assert.equal(deriveSeed({ ...identity }, "combat"), seed);
 	assert.notEqual(deriveSeed(identity, "environment"), seed);
 	assert.notEqual(deriveSeed({ ...identity, trialIndex: 6 }, "combat"), seed);
