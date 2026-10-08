@@ -1,6 +1,6 @@
 import { defaultStatBlock, type TStatBlock, type TStatsType } from "../character/BaseCharacter.ts";
 import { abilityNames, type CombatantOptions, combatantData } from "../character/CombatantData.ts";
-import type { DamageDefenses } from "../combat/DamageTypes.ts";
+import type { DamageDefenses } from "../combat/damage/DamageTypes.ts";
 import type { TConditionName, TConditionState } from "../modifiers/Conditions.ts";
 
 /**

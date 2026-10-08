@@ -7,16 +7,16 @@
   "type": "module",
   "main": "index.js",
   "scripts": {
-    "test": "tsx --test src/**/*.test.ts",
+    "test": "tsx scripts/test.ts",
     "start": "tsx src/index.ts",
     "dev": "tsx src/index.ts",
     "prepare": "husky",
     "typecheck": "tsc --noEmit",
-    "lint": "biome check src",
+    "lint": "biome check src tests scripts",
     "check": "npm run typecheck && npm run lint && npm test"
   },
   "lint-staged": {
-    "src/**/*.ts": "biome check"
+    "{src,tests,scripts}/**/*.ts": "biome check"
   },
   "devDependencies": {
     "@biomejs/biome": "2.4.7",

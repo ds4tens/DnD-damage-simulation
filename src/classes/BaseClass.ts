@@ -1,7 +1,7 @@
 import type { TStatsType } from "../character/BaseCharacter.ts";
-import type { ResourceDefinition } from "../combat/CombatResources.ts";
 import type { CombatHook, TAttackContext, TPostHitContext, TTurnContext } from "../combat/CombatTypes.ts";
-import type Weapon from "../Items/Weapon.ts";
+import type { ResourceDefinition } from "../combat/state/CombatResources.ts";
+import type Weapon from "../items/weapons/Weapon.ts";
 import type { TCombatModifier } from "../modifiers/Modifiers.ts";
 
 /** Passive class definition: mutable combat resources belong to EncounterState. */

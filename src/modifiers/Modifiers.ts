@@ -1,5 +1,5 @@
 import type { TAttackContext, TPostHitContext, TTurnContext } from "../combat/CombatTypes.ts";
-import type { DamageComponent } from "../combat/DamageTypes.ts";
+import type { DamageComponent } from "../combat/damage/DamageTypes.ts";
 export type TCombatModifier = {
 	source: string;
 	turn?: { canAct?: (ctx: TTurnContext) => boolean };

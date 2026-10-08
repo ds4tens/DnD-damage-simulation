@@ -7,7 +7,7 @@ import type {
 	TargetSnapshot,
 	UnarmedEffectSelection,
 } from "./CombatTypes.ts";
-import type { DamagePool, RolledDamageDie } from "./DamageTypes.ts";
+import type { DamagePool, RolledDamageDie } from "./damage/DamageTypes.ts";
 
 export interface CombatStrategy {
 	useOptionalFeature(snapshot: Readonly<FeatureSnapshot>, featureId: string): boolean;
