@@ -1,4 +1,5 @@
 import BaseCharacter from "../character/BaseCharacter.ts";
+import type { BarbarianCombatState } from "../classes/BarbarianState.ts";
 import type { TConditionState } from "../modifiers/Conditions.ts";
 import {
 	type PersistentResourceSnapshot,
@@ -49,6 +50,10 @@ export type CombatantState = {
 	classState: Record<string, number | boolean | string>;
 	resources: Record<string, ResourcePool>;
 	resourceSpent: Record<string, number>;
+	barbarian?: BarbarianCombatState;
+	sizeOverride?: CreatureSize;
+	speedBonus?: number;
+	grappledBy?: string;
 };
 export type TurnState = {
 	id: number;
@@ -58,6 +63,7 @@ export type TurnState = {
 	used: Map<string, Set<string>>;
 	hitActors: Set<string>;
 	attackCounts: Map<string, number>;
+	attackRollCounts: Map<string, number>;
 	loadingUsed: Set<string>;
 	movementSpent: number;
 };
@@ -151,12 +157,24 @@ export class EncounterState {
 			if (definition instanceof BaseCharacter)
 				for (const resource of definition.characterClass.getResourceDefinitions(definition.level))
 					this.initializeResource(participant.id, resource);
+			if (definition instanceof BaseCharacter && definition.buildData) {
+				const kinds = new Set(
+					inventory.flatMap((item) => (item.weapon.ammunitionKind ? [item.weapon.ammunitionKind] : [])),
+				);
+				for (const kind of kinds)
+					this.initializeResource(participant.id, {
+						id: `ammunition.${kind}`,
+						maxUses: definition.buildData.stock.ammunition?.[kind] ?? 0,
+						shortRest: "none",
+						longRest: "none",
+					});
+			}
 		}
 		for (const id of this.ids) initializeHitPoints(this, id);
 	}
 	size(actorId: string): CreatureSize {
 		this.definition(actorId);
-		return this.sizes.get(actorId) ?? "medium";
+		return this.state(actorId).sizeOverride ?? this.sizes.get(actorId) ?? "medium";
 	}
 	hitPointMode(actorId: string): "finite" | "inexhaustible" {
 		this.definition(actorId);
@@ -191,6 +209,13 @@ export class EncounterState {
 	}
 	resourceSpentSnapshot(actorId: string): PersistentResourceSnapshot {
 		return Object.freeze({ ...this.state(actorId).resourceSpent });
+	}
+	restoreResource(actorId: string, resourceId: string, amount?: number): void {
+		const pool = this.state(actorId).resources[resourceId];
+		if (!pool || (amount !== undefined && (!Number.isSafeInteger(amount) || amount < 0)))
+			throw new Error("Invalid resource restoration");
+		pool.remaining =
+			amount === undefined ? pool.definition.maxUses : Math.min(pool.definition.maxUses, pool.remaining + amount);
 	}
 	resourceSnapshot(actorId: string): PersistentResourceSnapshot {
 		return Object.freeze(
@@ -272,6 +297,7 @@ export class EncounterState {
 			used: new Map(),
 			hitActors: new Set(),
 			attackCounts: new Map(),
+			attackRollCounts: new Map(),
 			loadingUsed: new Set(),
 			movementSpent: 0,
 		};
@@ -387,7 +413,10 @@ export class EncounterState {
 			byKind.set(effect.kind, Math.max(byKind.get(effect.kind) ?? 0, effect.speedReduction ?? 0));
 		return Math.max(
 			0,
-			this.definition(id).speed - 5 * exhaustion - [...byKind.values()].reduce((sum, reduction) => sum + reduction, 0),
+			this.definition(id).speed +
+				(this.state(id).speedBonus ?? 0) -
+				5 * exhaustion -
+				[...byKind.values()].reduce((sum, reduction) => sum + reduction, 0),
 		);
 	}
 	hasAttackDisadvantage(id: string): boolean {

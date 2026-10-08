@@ -8,7 +8,7 @@ import type { TConditionState } from "../modifiers/Conditions.ts";
 import type { TCombatModifier } from "../modifiers/Modifiers.ts";
 import type BaseMonster from "../monster/BaseMonster.ts";
 import type { PersistentResourceSnapshot, ResourceDefinition } from "./CombatResources.ts";
-import type { DamageComponent, DamagePool, DamageResult, RolledDamageDie } from "./DamageTypes.ts";
+import type { DamageComponent, DamagePool, DamageResult, DamageType, RolledDamageDie } from "./DamageTypes.ts";
 import type { CombatantState, EffectInput, EncounterState, TimedEffect } from "./EncounterState.ts";
 import type { DeathSaveResult, LifeState, ZeroHpBehavior } from "./HitPointTypes.ts";
 import type { SavingThrowRequest, SavingThrowResult } from "./SavingThrowTypes.ts";
@@ -40,7 +40,15 @@ export type HandState = { left: string | null; right: string | null };
 export type AttackActionHandle = Readonly<{ id: string; actorId: string; turnId: number }>;
 export type AttackGrant = Readonly<{ id: string; actorId: string; turnId: number }>;
 export type ActionSource = "attack-action" | "bonus-action" | "reaction";
-export type AttackOrigin = "primary" | "light" | "nick" | "cleave" | "hew" | "scenario";
+export type AttackOrigin =
+	| "primary"
+	| "light"
+	| "nick"
+	| "cleave"
+	| "hew"
+	| "pole-strike"
+	| "dual-wielder"
+	| "scenario";
 export type AttackMode = "melee" | "ranged" | "thrown";
 export type AttackRequest = {
 	actorId: string;
@@ -149,6 +157,7 @@ export type FeatureSnapshot = {
 	actionAvailable: boolean;
 	bonusActionAvailable: boolean;
 	roll?: Readonly<{ sides: number; value: number; kind: RollKind }>;
+	savingThrow?: Readonly<SavingThrowResult>;
 };
 export type FeatureActionChoice = { id: string; cost: "action" | "bonus-action" | "none"; targetId?: string };
 export type FeatureAction = FeatureActionChoice & {
@@ -156,6 +165,8 @@ export type FeatureAction = FeatureActionChoice & {
 	validate?: (ctx: FeatureActionContext) => boolean;
 	execute?: (ctx: FeatureActionContext) => void;
 	attack?: AttackSelection;
+	/** Trusted feature rule, attached to its engine-issued grant only. */
+	attackDamage?: { dice: readonly number[]; damageType: DamageType; suppressPositiveAbility?: boolean };
 };
 export type FeatureActionContext = {
 	actorId: string;
@@ -163,6 +174,7 @@ export type FeatureActionContext = {
 	encounter: EncounterState;
 	roller: DiceRoller;
 	window: FeatureActionWindow;
+	completedAttackActionId?: string;
 	useFeature(featureId: string): boolean;
 	chooseOption(featureId: string, candidates: readonly string[]): string | null;
 	resolveSavingThrow(request: SavingThrowRequest): SavingThrowResult;
@@ -183,6 +195,10 @@ export type RollContext = {
 	/** Raw roller: replacements never recursively trigger the same window. */
 	roller: DiceRoller;
 	kind: RollKind;
+	rollTest?: Readonly<{ id: string; dieIndex: number }>;
+	forgoAdvantage?: boolean;
+	savingThrow?: Readonly<SavingThrowResult>;
+	distanceTo(targetId: string): number | undefined;
 	useFeature(featureId: string): boolean;
 	chooseOption(featureId: string, candidates: readonly string[]): string | null;
 };
@@ -190,6 +206,7 @@ export type SaveEventContext = RollContext & { request: Readonly<SavingThrowRequ
 export type AttackContext = {
 	encounter: EncounterState;
 	roller: DiceRoller;
+	damageRoller: DiceRoller;
 	attacker: CombatantDefinition;
 	character: BaseCharacter | undefined;
 	attackAbility: TStatsType;
@@ -204,6 +221,7 @@ export type AttackContext = {
 	distance?: number;
 	hit?: HitResult;
 	decisions: DecisionRecord[];
+	featureSelections: Record<string, string | boolean>;
 	isOwnTurn: boolean;
 	canSee?: (observerId: string, targetId: string) => boolean;
 	hasUsed(featureId: string): boolean;
@@ -211,6 +229,8 @@ export type AttackContext = {
 	useFeature(featureId: string): boolean;
 	chooseOption(featureId: string, candidates: readonly string[]): string | null;
 	resolveSavingThrow(request: SavingThrowRequest): SavingThrowResult;
+	/** Trusted Unarmed Damage+Grapple rules; undefined means the size/hand requirements fail. */
+	resolveGrapple(targetId: string): SavingThrowResult | undefined;
 	dealDamage(targetId: string, components: readonly DamageComponent[]): DamageResult;
 	d20Mode(
 		first: number,
@@ -240,7 +260,11 @@ export type CombatHook = {
 	startTurn?: (ctx: FeatureActionContext) => void;
 	endTurn?: (ctx: FeatureActionContext) => void;
 	onInitiative?: (ctx: RollContext) => void;
+	beforeAttack?: (ctx: AttackContext) => void;
+	prepareAttack?: (ctx: AttackContext, modifier: TCombatModifier) => TCombatModifier;
+	afterHitDamage?: (ctx: HitContext, result: AttackResult) => void;
 	afterHit?: (ctx: HitContext) => HitResult;
+	ignoreResistance?: (ctx: RollContext, targetId: string, damageType: DamageType) => boolean;
 	afterSavingThrow?: (ctx: SaveEventContext, result: SavingThrowResult) => SavingThrowResult;
 	applies?: (ctx: AttackContext) => boolean;
 	attackModifiers?: (ctx: AttackContext) => readonly TCombatModifier[];

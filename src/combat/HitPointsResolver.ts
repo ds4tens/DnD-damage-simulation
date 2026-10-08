@@ -36,7 +36,12 @@ export function initializeHitPoints(encounter: EncounterState, targetId: string)
 		state.lifeState = "dead";
 }
 /** Apply R/I/V once per aggregated damage type, never per component or separate attack. */
-export function resolveDefenses(encounter: EncounterState, targetId: string, byType: DamageByType): DamageByType {
+export function resolveDefenses(
+	encounter: EncounterState,
+	targetId: string,
+	byType: DamageByType,
+	ignoredResistances: readonly (keyof DamageByType)[] = [],
+): DamageByType {
 	const defenses = encounter.definition(targetId).defenses;
 	const result: DamageByType = {};
 	for (const [type, amount] of Object.entries(byType)) {
@@ -46,7 +51,8 @@ export function resolveDefenses(encounter: EncounterState, targetId: string, byT
 		let applied = amount;
 		if (defenses.immunities.includes(damageType)) applied = 0;
 		else {
-			if (defenses.resistances.includes(damageType)) applied = Math.floor(applied / 2);
+			if (defenses.resistances.includes(damageType) && !ignoredResistances.includes(damageType))
+				applied = Math.floor(applied / 2);
 			if (defenses.vulnerabilities.includes(damageType)) applied *= 2;
 		}
 		result[damageType] = applied;

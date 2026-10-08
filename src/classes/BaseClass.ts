@@ -1,6 +1,6 @@
 import type { TStatsType } from "../character/BaseCharacter.ts";
 import type { ResourceDefinition } from "../combat/CombatResources.ts";
-import type { TAttackContext, TPostHitContext, TTurnContext } from "../combat/CombatTypes.ts";
+import type { CombatHook, TAttackContext, TPostHitContext, TTurnContext } from "../combat/CombatTypes.ts";
 import type Weapon from "../Items/Weapon.ts";
 import type { TCombatModifier } from "../modifiers/Modifiers.ts";
 
@@ -20,6 +20,12 @@ class BaseClass {
 	}
 	getResourceDefinitions(_level: number): readonly ResourceDefinition[] {
 		return [];
+	}
+	getCombatHooks(_level: number): readonly CombatHook[] {
+		return [];
+	}
+	getMeleeReachBonus(_level: number, _weapon: Weapon, _isOwnTurn: boolean): number {
+		return 0;
 	}
 	getAttackCount(_level: number): number {
 		return 1;

@@ -98,9 +98,14 @@ export function prepareWeaponAttack(encounter: EncounterState, request: AttackRe
 	if (request.mode !== "melee" && request.mode !== "ranged" && request.mode !== "thrown")
 		throw new Error("Invalid weapon attack mode");
 	const actor = encounter.definition(request.actorId);
+	const crossbowExpert = actor instanceof BaseCharacter && actor.feats.some((feat) => feat.name === "crossbow-expert");
+	const sharpshooter = actor instanceof BaseCharacter && actor.feats.some((feat) => feat.name === "sharpshooter");
 	const state = encounter.state(request.actorId);
 	const instance = selectWeaponInstance(encounter, request);
 	const weapon = instance.weapon;
+	const expertCrossbow = crossbowExpert && ["hand-crossbow", "light-crossbow", "heavy-crossbow"].includes(weapon.id);
+	if (weapon.ammunitionKind && state.resources[`ammunition.${weapon.ammunitionKind}`]?.remaining === 0)
+		throw new Error("No ammunition available");
 	if (state.spentWeaponInstanceIds.has(instance.id)) throw new Error("Weapon instance has already been thrown");
 	const hands = { ...state.hands };
 	let manipulationCost = 0;
@@ -125,7 +130,19 @@ export function prepareWeaponAttack(encounter: EncounterState, request: AttackRe
 	if (request.mode === "thrown" && !weapon.properties.includes("thrown")) throw new Error("Weapon cannot be thrown");
 	if (request.distance !== undefined) {
 		if (!Number.isFinite(request.distance) || request.distance < 0) throw new Error("Invalid attack distance");
-		if (request.mode === "melee" && request.distance > weapon.reach) throw new Error("Target is beyond melee reach");
+		if (
+			request.mode === "melee" &&
+			request.distance >
+				weapon.reach +
+					(actor instanceof BaseCharacter
+						? actor.characterClass.getMeleeReachBonus(
+								actor.level,
+								weapon,
+								encounter.hasActiveTurn && encounter.turn.ownerId === request.actorId,
+							)
+						: 0)
+		)
+			throw new Error("Target is beyond melee reach");
 		if (request.mode !== "melee" && (!weapon.range || request.distance > weapon.range.long))
 			throw new Error("Target is beyond weapon range");
 	}
@@ -149,7 +166,13 @@ export function prepareWeaponAttack(encounter: EncounterState, request: AttackRe
 		hands.left = instance.id;
 		hands.right = instance.id;
 	} else if (hands.left === instance.id && hands.right === instance.id) hands.right = null;
-	if (weapon.properties.includes("ammunition") && !twoHanded && hands.left !== null && hands.right !== null)
+	if (
+		weapon.properties.includes("ammunition") &&
+		!expertCrossbow &&
+		!twoHanded &&
+		hands.left !== null &&
+		hands.right !== null
+	)
 		throw new Error("One-handed Ammunition weapon requires a free loading hand");
 	const attackAbility = selectAbility(encounter, request, weapon);
 	const abilityModifier = actor.getStatModifier(attackAbility);
@@ -166,17 +189,22 @@ export function prepareWeaponAttack(encounter: EncounterState, request: AttackRe
 		request.mode !== "melee" &&
 		request.distance !== undefined &&
 		weapon.range &&
-		request.distance > weapon.range.normal
+		request.distance > weapon.range.normal &&
+		!(sharpshooter && weapon.category === "ranged")
 	)
 		attackModifiers.push({ source: "weapon.long-range", attackRoll: { disadvantage: 1 } });
 	const suppressAbility =
-		request.attackOrigin === "light" || request.attackOrigin === "nick" || request.attackOrigin === "cleave";
+		(request.attackOrigin === "light" ||
+			request.attackOrigin === "nick" ||
+			request.attackOrigin === "cleave" ||
+			request.attackOrigin === "dual-wielder") &&
+		!(expertCrossbow && (request.attackOrigin === "light" || request.attackOrigin === "nick"));
 	const damageDice =
 		request.mode === "melee" && twoHanded && weapon.versatileDamage
 			? weapon.versatileDamage
 			: weapon.damage.map((die) => die.maxValue);
 	let loadingKey: string | undefined;
-	if (weapon.properties.includes("loading")) {
+	if (weapon.properties.includes("loading") && !expertCrossbow) {
 		if (!request.actionId) throw new Error("Loading needs an issued action identity");
 		loadingKey = JSON.stringify([request.actorId, request.actionId, instance.id]);
 	}
@@ -208,7 +236,10 @@ export function prepareWeaponAttack(encounter: EncounterState, request: AttackRe
 		...(loadingKey === undefined ? {} : { loadingKey }),
 		...(isThrown ? { thrownInstanceId: instance.id } : {}),
 		limitations: [
-			"Scenario supply: unlimited ammunition and thrown weapon stock; hands and Loading still apply",
+			...(weapon.properties.includes("ammunition") &&
+			!(weapon.ammunitionKind && state.resources[`ammunition.${weapon.ammunitionKind}`])
+				? ["Raw scenario assumes unlimited ammunition"]
+				: []),
 			...(weapon.weaponMastery === "push" ? ["Weapon Mastery Push is outside the supported scenario"] : []),
 		],
 	};

@@ -40,6 +40,7 @@ function fixture(weapon: Weapon, options: { selected?: boolean; strength?: numbe
 	const ctx: AttackContext = {
 		encounter,
 		roller,
+		damageRoller: roller,
 		attacker: actor,
 		character: actor,
 		attackAbility: "strength",
@@ -51,12 +52,14 @@ function fixture(weapon: Weapon, options: { selected?: boolean; strength?: numbe
 		attackIndexInTurn: 0,
 		hasHitOccurredThisTurn: false,
 		decisions: [],
+		featureSelections: {},
 		isOwnTurn: true,
 		hasUsed: (feature) => encounter.hasUsed("hero", feature),
 		markUsed: (feature) => encounter.markUsed("hero", feature),
 		useFeature: () => options.use ?? true,
 		chooseOption: (_feature, candidates) => candidates[0] ?? null,
 		resolveSavingThrow: (request) => resolveSavingThrow(encounter, request, roller),
+		resolveGrapple: () => undefined,
 		dealDamage: (targetId, components) =>
 			resolveDamage(encounter, targetId, rollDamageComponents(components, false, roller)),
 		d20Mode: (_first, mode) => mode,

@@ -5,6 +5,7 @@ import type {
 	DamageComponent,
 	DamagePool,
 	DamageResult,
+	DamageType,
 	RolledDamageComponent,
 	RolledDamageDie,
 } from "./DamageTypes.ts";
@@ -105,12 +106,12 @@ export function resolveDamage(
 	encounter: EncounterState,
 	targetId: string,
 	pool: DamagePool,
-	options: { critical?: boolean } = {},
+	options: { critical?: boolean; ignoredResistances?: readonly DamageType[] } = {},
 ): DamageResult {
 	validateDamagePool(pool);
 	const byType = sumDamageByType(pool);
 	const rolledDamage = Object.values(byType).reduce((sum, value) => sum + (value ?? 0), 0);
-	const appliedByType = resolveDefenses(encounter, targetId, byType);
+	const appliedByType = resolveDefenses(encounter, targetId, byType, options.ignoredResistances);
 	const appliedDamage = Object.values(appliedByType).reduce((sum, value) => sum + (value ?? 0), 0);
 	return {
 		components: pool,

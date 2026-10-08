@@ -18,8 +18,8 @@ const asi: FeatSelection = {
 	abilityScoreImprovement: [{ abilityScore: "strength", amount: 2 }],
 };
 
-test("canonical registry exports all five immutable metadata rules and default hooks", () => {
-	assert.equal(Object.keys(featRegistry).length, 5);
+test("canonical registry exports the complete immutable PHB feat catalog and default hooks", () => {
+	assert.equal(Object.keys(featRegistry).length, 75);
 	assert.equal(featRegistry["ability-score-improvement"].combatHook, undefined);
 	assert.equal(featRegistry["savage-attacker"].type, "origin");
 	for (const [name, rule] of Object.entries(featRegistry)) {
@@ -118,7 +118,10 @@ test("public engine automatically resolves all five feats: crit38, HP30→0, one
 	assert.equal(f.encounter.hasUsed("hero", "piercer.puncture"), true);
 	assert.equal(f.encounter.hasUsed("hero", "slasher.hamstring"), true);
 	assert.equal(f.roller.remaining, 0);
-	assert.ok(result.limitations.some((limitation) => limitation.includes("Scenario supply")));
+	assert.equal(
+		result.limitations.some((limitation) => limitation.includes("unlimited")),
+		false,
+	);
 });
 
 test("optional strategy declines all chosen benefits while mandatory Slasher critical still applies", () => {

@@ -57,7 +57,12 @@ export function rollInitiative(
 			return [
 				id,
 				{
-					bonus: actor.getStatModifier("dexterity") + exhaustionPenalty(conditions),
+					bonus:
+						actor.getStatModifier("dexterity") +
+						exhaustionPenalty(conditions) +
+						(actor instanceof BaseCharacter && actor.feats.some((feat) => feat.name === "alert")
+							? actor.getProficiencyBonus()
+							: 0),
 					advantage: conditions.some((condition) => condition.name === "invisible"),
 					disadvantage:
 						surprised.has(id) ||
