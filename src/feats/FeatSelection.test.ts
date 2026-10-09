@@ -21,11 +21,12 @@ const half = (name: FeatName, abilityScore: TStatsType = "strength"): FeatSelect
 const resolve = (feats: readonly FeatSelection[], overrides: Partial<TStatBlock> = {}, level = 4) =>
 	resolveFeatSelections({ level, stats: { ...stats, ...overrides }, feats });
 
-test("canonical metadata matches all five 2024 feats and is immutable", () => {
+test("canonical metadata includes the five existing feats in the complete PHB2024 index", () => {
 	assert.equal(EFeatName.ABILITY_SCORE_IMPROVEMENT, "ability-score-improvement");
 	assert.equal(EFeatName.GREAT_WEAPON_MASTER, "great-weapon-master");
-	assert.equal(Object.keys(featMetadata).length, 5);
-	for (const rule of Object.values(featMetadata)) {
+	assert.equal(Object.keys(featMetadata).length, 75);
+	for (const name of Object.values(EFeatName)) {
+		const rule = featMetadata[name];
 		assert.equal(rule.repeatable, rule.name === "ability-score-improvement");
 		assert.equal(rule.type, rule.name === "savage-attacker" ? "origin" : "general");
 		assert.equal(Object.isFrozen(rule), true);
@@ -184,6 +185,20 @@ test("local validation rejects invalid levels and stat values", () => {
 	for (const level of [0, 21, 3.5, Number.NaN]) assert.throws(() => resolve([], {}, level), /Invalid character level/);
 	for (const strength of [0, -1, 12.5, Number.NaN, Number.POSITIVE_INFINITY])
 		assert.throws(() => resolve([], { strength }), /Invalid ability score/);
+});
+
+test("named Spellcasting prerequisite does not accept Pact Magic or merely casting spells", () => {
+	const feat = half("boon-of-spell-recall", "intelligence");
+	assert.deepEqual(featMetadata[feat.name].requiredFeaturesAnyOf, ["Spellcasting"]);
+	for (const features of [[], ["Pact Magic"]] as const)
+		assert.throws(
+			() => resolveFeatSelections({ level: 19, stats, feats: [feat], context: { features } }),
+			/Required named feature missing/,
+		);
+	assert.equal(
+		resolveFeatSelections({ level: 19, stats, feats: [feat], context: { features: ["Spellcasting"] } }).feats.length,
+		1,
+	);
 });
 
 test("frozen inputs remain unchanged after successful and rejected multi-feat selections", () => {

@@ -1,6 +1,20 @@
 import BaseCharacter from "../character/BaseCharacter.ts";
+import type { BarbarianCombatState } from "../classes/BarbarianState.ts";
 import type { TConditionState } from "../modifiers/Conditions.ts";
-import type { CombatantDefinition, CombatantInput, HandState, TargetSnapshot, WeaponInstance } from "./CombatTypes.ts";
+import {
+	type PersistentResourceSnapshot,
+	type ResourceDefinition,
+	type ResourcePool,
+	validateResourceDefinition,
+} from "./CombatResources.ts";
+import type {
+	CombatantDefinition,
+	CombatantInput,
+	CreatureSize,
+	HandState,
+	TargetSnapshot,
+	WeaponInstance,
+} from "./CombatTypes.ts";
 import type { HpChangeEvent } from "./DamageTypes.ts";
 import { applyDamage, initializeHitPoints } from "./HitPointsResolver.ts";
 import type { DeathSaveState, LifeState, ZeroHpBehavior } from "./HitPointTypes.ts";
@@ -19,6 +33,8 @@ export type TimedEffect = {
 	attackDisadvantage?: boolean;
 	attackAdvantageAgainst?: string;
 	consumeOnAttack?: { actorId: string; targetId?: string };
+	savingThrowDisadvantage?: boolean;
+	consumeOnSavingThrow?: boolean;
 };
 export type EffectInput = Omit<TimedEffect, "createdTurnId" | "id">;
 export type CombatantState = {
@@ -32,6 +48,12 @@ export type CombatantState = {
 	spentWeaponInstanceIds: Set<string>;
 	conditions: TConditionState[];
 	classState: Record<string, number | boolean | string>;
+	resources: Record<string, ResourcePool>;
+	resourceSpent: Record<string, number>;
+	barbarian?: BarbarianCombatState;
+	sizeOverride?: CreatureSize;
+	speedBonus?: number;
+	grappledBy?: string;
 };
 export type TurnState = {
 	id: number;
@@ -41,7 +63,9 @@ export type TurnState = {
 	used: Map<string, Set<string>>;
 	hitActors: Set<string>;
 	attackCounts: Map<string, number>;
+	attackRollCounts: Map<string, number>;
 	loadingUsed: Set<string>;
+	movementSpent: number;
 };
 export class EncounterState {
 	private readonly definitions = new Map<string, CombatantDefinition>();
@@ -50,6 +74,9 @@ export class EncounterState {
 	private readonly inventories = new Map<string, WeaponInstance[]>();
 	private readonly masteries = new Map<string, readonly string[]>();
 	private readonly zeroHpBehaviors = new Map<string, ZeroHpBehavior>();
+	private readonly hitPointModes = new Map<string, "finite" | "inexhaustible">();
+	private readonly initialResources = new Map<string, PersistentResourceSnapshot>();
+	private readonly sizes = new Map<string, CreatureSize>();
 	private nextEffectId = 1;
 	private lifecycleMode: "manual" | "scheduled" | undefined;
 	roundNumber = 0;
@@ -76,6 +103,14 @@ export class EncounterState {
 				...(participant.weapons ??
 					(definition instanceof BaseCharacter ? [{ id: `${participant.id}:weapon`, weapon: definition.weapon }] : [])),
 			]);
+			if (
+				new Set(participant.initialSpentWeaponInstanceIds ?? []).size !==
+					(participant.initialSpentWeaponInstanceIds ?? []).length ||
+				(participant.initialSpentWeaponInstanceIds ?? []).some(
+					(id) => !inventory.some((instance) => instance.id === id),
+				)
+			)
+				throw new Error("Invalid initial spent weapon instances");
 			if (inventory.some((item) => !item.id) || new Set(inventory.map((item) => item.id)).size !== inventory.length)
 				throw new Error("Duplicate or empty weapon instance ID");
 			this.inventories.set(participant.id, inventory);
@@ -88,6 +123,19 @@ export class EncounterState {
 			const zeroHpBehavior =
 				participant.zeroHpBehavior ?? (definition instanceof BaseCharacter ? "death-saves" : "die");
 			this.zeroHpBehaviors.set(participant.id, zeroHpBehavior);
+			const mode = participant.hitPointMode ?? "finite";
+			if (mode !== "finite" && mode !== "inexhaustible") throw new Error("Invalid hit point mode");
+			if (mode === "inexhaustible" && (hitPoints <= 0 || temporaryHp !== 0))
+				throw new Error("Inexhaustible targets require positive HP and no Temporary HP");
+			this.hitPointModes.set(participant.id, mode);
+			const size = participant.size ?? "medium";
+			if (!["tiny", "small", "medium", "large", "huge", "gargantuan"].includes(size))
+				throw new Error("Invalid creature size");
+			this.sizes.set(participant.id, size);
+			const initialResources = { ...(participant.initialResources ?? {}) };
+			if (Object.values(initialResources).some((value) => !Number.isSafeInteger(value) || value < 0))
+				throw new Error("Invalid initial resource uses");
+			this.initialResources.set(participant.id, initialResources);
 			const hands = structuredClone(participant.initialHands ?? { left: inventory[0]?.id ?? null, right: null });
 			for (const id of Object.values(hands))
 				if (id !== null && id !== "$shield" && !inventory.some((item) => item.id === id))
@@ -100,12 +148,84 @@ export class EncounterState {
 				reactionAvailable: true,
 				ownTurnCount: 0,
 				hands,
-				spentWeaponInstanceIds: new Set(),
+				spentWeaponInstanceIds: new Set(participant.initialSpentWeaponInstanceIds ?? []),
 				conditions: structuredClone(original.conditions),
 				classState: { ...(participant.initialClassState ?? {}) },
+				resources: {},
+				resourceSpent: {},
 			});
+			if (definition instanceof BaseCharacter)
+				for (const resource of definition.characterClass.getResourceDefinitions(definition.level))
+					this.initializeResource(participant.id, resource);
+			if (definition instanceof BaseCharacter && definition.buildData) {
+				const kinds = new Set(
+					inventory.flatMap((item) => (item.weapon.ammunitionKind ? [item.weapon.ammunitionKind] : [])),
+				);
+				for (const kind of kinds)
+					this.initializeResource(participant.id, {
+						id: `ammunition.${kind}`,
+						maxUses: definition.buildData.stock.ammunition?.[kind] ?? 0,
+						shortRest: "none",
+						longRest: "none",
+					});
+			}
 		}
 		for (const id of this.ids) initializeHitPoints(this, id);
+	}
+	size(actorId: string): CreatureSize {
+		this.definition(actorId);
+		return this.state(actorId).sizeOverride ?? this.sizes.get(actorId) ?? "medium";
+	}
+	hitPointMode(actorId: string): "finite" | "inexhaustible" {
+		this.definition(actorId);
+		return this.hitPointModes.get(actorId) ?? "finite";
+	}
+	initializeResource(actorId: string, definition: ResourceDefinition): void {
+		validateResourceDefinition(definition);
+		const resources = this.state(actorId).resources;
+		if (resources[definition.id]) throw new Error(`Duplicate combat resource: ${definition.id}`);
+		const remaining =
+			this.initialResources.get(actorId)?.[definition.id] ?? definition.initialUses ?? definition.maxUses;
+		if (!Number.isSafeInteger(remaining) || remaining < 0 || remaining > definition.maxUses)
+			throw new Error(`Invalid initial uses: ${definition.id}`);
+		resources[definition.id] = { definition: Object.freeze({ ...definition }), remaining };
+	}
+	validateInitialResources(actorId: string): void {
+		for (const id of Object.keys(this.initialResources.get(actorId) ?? {}))
+			if (!this.state(actorId).resources[id]) throw new Error(`Unknown initial combat resource: ${id}`);
+	}
+	resourceRemaining(actorId: string, resourceId: string): number {
+		const pool = this.state(actorId).resources[resourceId];
+		if (!pool) throw new Error(`Unknown combat resource: ${resourceId}`);
+		return pool.remaining;
+	}
+	spendResource(actorId: string, resourceId: string, amount = 1): void {
+		if (!Number.isSafeInteger(amount) || amount < 1) throw new Error("Invalid resource cost");
+		const pool = this.state(actorId).resources[resourceId];
+		if (!pool || pool.remaining < amount) throw new Error(`Combat resource unavailable: ${resourceId}`);
+		pool.remaining -= amount;
+		const state = this.state(actorId);
+		state.resourceSpent[resourceId] = (state.resourceSpent[resourceId] ?? 0) + amount;
+	}
+	resourceSpentSnapshot(actorId: string): PersistentResourceSnapshot {
+		return Object.freeze({ ...this.state(actorId).resourceSpent });
+	}
+	restoreResource(actorId: string, resourceId: string, amount?: number): void {
+		const pool = this.state(actorId).resources[resourceId];
+		if (!pool || (amount !== undefined && (!Number.isSafeInteger(amount) || amount < 0)))
+			throw new Error("Invalid resource restoration");
+		pool.remaining =
+			amount === undefined ? pool.definition.maxUses : Math.min(pool.definition.maxUses, pool.remaining + amount);
+	}
+	resourceSnapshot(actorId: string): PersistentResourceSnapshot {
+		return Object.freeze(
+			Object.fromEntries(Object.entries(this.state(actorId).resources).map(([id, pool]) => [id, pool.remaining])),
+		);
+	}
+	consumeSavingThrowEffects(actorId: string): void {
+		for (let index = this.effects.length - 1; index >= 0; index--)
+			if (this.effects[index]?.targetId === actorId && this.effects[index]?.consumeOnSavingThrow)
+				this.effects.splice(index, 1);
 	}
 	get hasActiveTurn(): boolean {
 		return this.currentTurn !== undefined;
@@ -177,7 +297,9 @@ export class EncounterState {
 			used: new Map(),
 			hitActors: new Set(),
 			attackCounts: new Map(),
+			attackRollCounts: new Map(),
 			loadingUsed: new Set(),
+			movementSpent: 0,
 		};
 		return this.currentTurn;
 	}
@@ -275,6 +397,10 @@ export class EncounterState {
 		this.definition(id);
 		return freezeSnapshot(structuredClone(this.effects.filter((effect) => effect.targetId === id)));
 	}
+	expireTimedEffects(): void {
+		if (this.hasActiveTurn) throw new Error("Cannot expire all timed effects during an active turn");
+		this.effects.length = 0;
+	}
 	effectiveSpeed(id: string): number {
 		const conditions = this.state(id).conditions;
 		if (
@@ -291,7 +417,10 @@ export class EncounterState {
 			byKind.set(effect.kind, Math.max(byKind.get(effect.kind) ?? 0, effect.speedReduction ?? 0));
 		return Math.max(
 			0,
-			this.definition(id).speed - 5 * exhaustion - [...byKind.values()].reduce((sum, reduction) => sum + reduction, 0),
+			this.definition(id).speed +
+				(this.state(id).speedBonus ?? 0) -
+				5 * exhaustion -
+				[...byKind.values()].reduce((sum, reduction) => sum + reduction, 0),
 		);
 	}
 	hasAttackDisadvantage(id: string): boolean {
@@ -306,6 +435,10 @@ export class EncounterState {
 			speed: this.effectiveSpeed(id),
 			lifeState: this.state(id).lifeState,
 			temporaryHp: this.state(id).temporaryHp,
+			hitPointMode: this.hitPointMode(id),
+			resources: this.resourceSnapshot(id),
+			classState: Object.freeze({ ...this.state(id).classState }),
+			size: this.size(id),
 		});
 	}
 	applyDamage(targetId: string, damage: number, options: { critical?: boolean } = {}): HpChangeEvent {

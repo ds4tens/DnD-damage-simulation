@@ -7,9 +7,10 @@ import { Battleaxe, Dagger, Greataxe, Greatsword, Handaxe, Longsword, Whip } fro
 import type Weapon from "../Items/Weapon.ts";
 import BaseMonster from "../monster/BaseMonster.ts";
 import type { AttackContext, AttackResult } from "./CombatTypes.ts";
-import { rollDamageComponents } from "./DamageResolver.ts";
+import { resolveDamage, rollDamageComponents } from "./DamageResolver.ts";
 import { EncounterState } from "./EncounterState.ts";
 import { applyDamage } from "./HitPointsResolver.ts";
+import { resolveSavingThrow } from "./SavingThrowResolver.ts";
 import type { SavingThrowRequest, SavingThrowResult } from "./SavingThrowTypes.ts";
 import { hasWeaponMastery, masteryMissComponents, resolveMasteryHit } from "./WeaponMasteryResolver.ts";
 
@@ -39,6 +40,7 @@ function fixture(weapon: Weapon, options: { selected?: boolean; strength?: numbe
 	const ctx: AttackContext = {
 		encounter,
 		roller,
+		damageRoller: roller,
 		attacker: actor,
 		character: actor,
 		attackAbility: "strength",
@@ -50,10 +52,20 @@ function fixture(weapon: Weapon, options: { selected?: boolean; strength?: numbe
 		attackIndexInTurn: 0,
 		hasHitOccurredThisTurn: false,
 		decisions: [],
+		featureSelections: {},
 		isOwnTurn: true,
+		distanceTo: () => undefined,
 		hasUsed: (feature) => encounter.hasUsed("hero", feature),
 		markUsed: (feature) => encounter.markUsed("hero", feature),
 		useFeature: () => options.use ?? true,
+		chooseOption: (_feature, candidates) => candidates[0] ?? null,
+		resolveSavingThrow: (request) => resolveSavingThrow(encounter, request, roller),
+		resolveGrapple: () => undefined,
+		dealAttackRiderDamage: (targetId, components) =>
+			resolveDamage(encounter, targetId, rollDamageComponents(components, false, roller)),
+		dealDamage: (targetId, components) =>
+			resolveDamage(encounter, targetId, rollDamageComponents(components, false, roller)),
+		d20Mode: (_first, mode) => mode,
 		chooseWeaponRoll: () => 0,
 		choosePunctureDie: () => null,
 		choosePiercerCriticalDie: () => null,

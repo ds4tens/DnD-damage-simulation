@@ -23,16 +23,21 @@ export const piercerHook: CombatHook = {
 			pool,
 			{ id, source: "feat.piercer.enhanced-critical", origin: "feat", damageType: "piercing", flatBonus: 0 },
 			chosen.sides,
-			ctx.roller,
+			ctx.damageRoller,
 		);
 	},
 	afterDamageRoll(ctx, pool) {
-		if (!pool.some((component) => component.damageType === "piercing") || ctx.hasUsed("piercer.puncture")) return pool;
+		if (
+			(!pool.some((component) => component.damageType === "piercing") &&
+				(ctx.primaryDamage?.byType.piercing ?? 0) <= 0) ||
+			ctx.hasUsed("piercer.puncture")
+		)
+			return pool;
 		const dice = allDamageDice(pool);
 		if (dice.length === 0) return pool;
 		const chosenId = ctx.choosePunctureDie(dice);
 		if (chosenId === null) return pool;
-		const result = rerollDamageDie(pool, chosenId, ctx.roller);
+		const result = rerollDamageDie(pool, chosenId, ctx.damageRoller);
 		ctx.markUsed("piercer.puncture");
 		return result;
 	},

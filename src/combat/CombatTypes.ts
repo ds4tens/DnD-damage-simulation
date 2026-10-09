@@ -7,17 +7,23 @@ import type Weapon from "../Items/Weapon.ts";
 import type { TConditionState } from "../modifiers/Conditions.ts";
 import type { TCombatModifier } from "../modifiers/Modifiers.ts";
 import type BaseMonster from "../monster/BaseMonster.ts";
-import type { DamageComponent, DamagePool, DamageResult, RolledDamageDie } from "./DamageTypes.ts";
+import type { PersistentResourceSnapshot, ResourceDefinition } from "./CombatResources.ts";
+import type { DamageComponent, DamagePool, DamageResult, DamageType, RolledDamageDie } from "./DamageTypes.ts";
 import type { CombatantState, EffectInput, EncounterState, TimedEffect } from "./EncounterState.ts";
 import type { DeathSaveResult, LifeState, ZeroHpBehavior } from "./HitPointTypes.ts";
-import type { SavingThrowResult } from "./SavingThrowTypes.ts";
+import type { SavingThrowRequest, SavingThrowResult } from "./SavingThrowTypes.ts";
 import type { CombatStrategy } from "./Strategy.ts";
 
 export type CombatantDefinition = BaseCharacter | BaseMonster;
+export type CreatureSize = "tiny" | "small" | "medium" | "large" | "huge" | "gargantuan";
 export type CombatantInput = {
 	id: string;
 	definition: CombatantDefinition;
 	initialClassState?: Record<string, number | boolean | string>;
+	initialResources?: PersistentResourceSnapshot;
+	hitPointMode?: "finite" | "inexhaustible";
+	size?: CreatureSize;
+	initialSpentWeaponInstanceIds?: readonly string[];
 	initialHitPoints?: number;
 	initialTemporaryHp?: number;
 	zeroHpBehavior?: ZeroHpBehavior;
@@ -34,7 +40,15 @@ export type HandState = { left: string | null; right: string | null };
 export type AttackActionHandle = Readonly<{ id: string; actorId: string; turnId: number }>;
 export type AttackGrant = Readonly<{ id: string; actorId: string; turnId: number }>;
 export type ActionSource = "attack-action" | "bonus-action" | "reaction";
-export type AttackOrigin = "primary" | "light" | "nick" | "cleave" | "hew" | "scenario";
+export type AttackOrigin =
+	| "primary"
+	| "light"
+	| "nick"
+	| "cleave"
+	| "hew"
+	| "pole-strike"
+	| "dual-wielder"
+	| "scenario";
 export type AttackMode = "melee" | "ranged" | "thrown";
 export type AttackRequest = {
 	actorId: string;
@@ -57,6 +71,8 @@ export type AttackRequest = {
 	mode: AttackMode;
 	weapon?: Weapon;
 	distance?: number;
+	/** Dual Wielder Quick Draw: second physical weapon operation in the same timing window. */
+	equipAdditional?: NonNullable<AttackRequest["equip"]>;
 	/** Explicit profile for monsters, Unarmed Strikes and test/scenario contributions. */
 	profile?: { attackBonus: number; damage: readonly DamageComponent[] };
 };
@@ -84,12 +100,38 @@ export type AttackResult = {
 	attackIndexInTurn: number;
 	hit: HitResult;
 	damage?: DamageResult;
+	/** A reduction by this weapon/Unarmed attack, including trusted riders; excludes separate save damage. */
+	attackDamageReducedToZero?: boolean;
 	decisions: readonly DecisionRecord[];
 	triggeredAttacks: readonly AttackResult[];
 	limitations: readonly string[];
 	savingThrows?: readonly SavingThrowResult[];
+	additionalDamage?: readonly DamageResult[];
 };
-export type AttackActionResult = { totalDamage: number; attacks: readonly AttackResult[] };
+export type CombatDamageEvent = { actorId: string; targetId: string; source: string; result: DamageResult };
+export type UnarmedEffectSelection = { targetId: string; effect: "grapple" | "shove-prone" };
+export type UnarmedEffectResult = UnarmedEffectSelection & {
+	effectId: string;
+	actorId: string;
+	turnId: number;
+	actionId: string;
+	attackIndexInTurn: number;
+	savingThrow: SavingThrowResult;
+	applied: boolean;
+	handReserved?: "left" | "right";
+};
+export type AttackActionOptions = {
+	mode?: AttackMode;
+	weapon?: Weapon;
+	distance?: number;
+	unarmed?: boolean;
+	unarmedEffects?: boolean;
+};
+export type AttackActionResult = {
+	totalDamage: number;
+	attacks: readonly AttackResult[];
+	unarmedEffects?: readonly UnarmedEffectResult[];
+};
 export type TurnStartResult = { ownerId: string; turnId: number; roundNumber: number; deathSave?: DeathSaveResult };
 export type DecisionRecord = { feature: string; choice: boolean | string | null; candidates?: readonly DamagePool[] };
 export type TargetSnapshot = {
@@ -100,6 +142,10 @@ export type TargetSnapshot = {
 	lifeState?: LifeState;
 	temporaryHp?: number;
 	conditions?: readonly Readonly<TConditionState>[];
+	hitPointMode?: "finite" | "inexhaustible";
+	resources?: PersistentResourceSnapshot;
+	classState?: Readonly<Record<string, number | boolean | string>>;
+	size?: CreatureSize;
 };
 export type ActionSnapshot = {
 	actor: TargetSnapshot;
@@ -123,10 +169,74 @@ export type AttackSnapshot = {
 	hit?: HitResult;
 	actor: TargetSnapshot;
 	target: TargetSnapshot;
+	attackAbility?: TStatsType;
+	attackIndexInTurn?: number;
 };
+export type FeatureActionWindow = "before-attack" | "after-attack";
+export type FeatureSnapshot = {
+	actor: TargetSnapshot;
+	targets: readonly TargetSnapshot[];
+	turnId: number | null;
+	turnOwnerId: string | null;
+	window: FeatureActionWindow | "initiative" | "roll";
+	actionAvailable: boolean;
+	bonusActionAvailable: boolean;
+	roll?: Readonly<{ sides: number; value: number; kind: RollKind }>;
+	savingThrow?: Readonly<SavingThrowResult>;
+};
+export type FeatureActionChoice = {
+	id: string;
+	cost: "action" | "bonus-action" | "none";
+	targetId?: string;
+	purpose?: "end";
+};
+export type FeatureAction = FeatureActionChoice & {
+	/** These callbacks are trusted rules; candidates expose only detached metadata. */
+	validate?: (ctx: FeatureActionContext) => boolean;
+	execute?: (ctx: FeatureActionContext) => void;
+	attack?: AttackSelection;
+	/** Trusted feature rule, attached to its engine-issued grant only. */
+	attackDamage?: { dice: readonly number[]; damageType: DamageType; suppressPositiveAbility?: boolean };
+};
+export type FeatureActionContext = {
+	actorId: string;
+	actor: CombatantDefinition;
+	encounter: EncounterState;
+	roller: DiceRoller;
+	window: FeatureActionWindow;
+	completedAttackActionId?: string;
+	useFeature(featureId: string): boolean;
+	chooseOption(featureId: string, candidates: readonly string[]): string | null;
+	resolveSavingThrow(request: SavingThrowRequest): SavingThrowResult;
+	dealDamage(targetId: string, components: readonly DamageComponent[]): DamageResult;
+	distanceTo(targetId: string): number | undefined;
+};
+export type FeatureActionResult = {
+	featureId: string;
+	actorId: string;
+	decisions: readonly DecisionRecord[];
+	attacks: readonly AttackResult[];
+};
+export type RollKind = "attack" | "damage" | "saving-throw" | "initiative" | "feature";
+export type RollContext = {
+	actorId: string;
+	actor: CombatantDefinition;
+	encounter: EncounterState;
+	/** Raw roller: replacements never recursively trigger the same window. */
+	roller: DiceRoller;
+	kind: RollKind;
+	rollTest?: Readonly<{ id: string; dieIndex: number }>;
+	forgoAdvantage?: boolean;
+	savingThrow?: Readonly<SavingThrowResult>;
+	distanceTo(targetId: string): number | undefined;
+	useFeature(featureId: string): boolean;
+	chooseOption(featureId: string, candidates: readonly string[]): string | null;
+};
+export type SaveEventContext = RollContext & { request: Readonly<SavingThrowRequest> };
 export type AttackContext = {
 	encounter: EncounterState;
 	roller: DiceRoller;
+	damageRoller: DiceRoller;
 	attacker: CombatantDefinition;
 	character: BaseCharacter | undefined;
 	attackAbility: TStatsType;
@@ -140,12 +250,26 @@ export type AttackContext = {
 	hasHitOccurredThisTurn: boolean;
 	distance?: number;
 	hit?: HitResult;
+	primaryDamage?: DamageResult;
 	decisions: DecisionRecord[];
+	featureSelections: Record<string, string | boolean>;
 	isOwnTurn: boolean;
+	distanceTo(targetId: string): number | undefined;
 	canSee?: (observerId: string, targetId: string) => boolean;
 	hasUsed(featureId: string): boolean;
 	markUsed(featureId: string): void;
 	useFeature(featureId: string): boolean;
+	chooseOption(featureId: string, candidates: readonly string[]): string | null;
+	resolveSavingThrow(request: SavingThrowRequest): SavingThrowResult;
+	/** Trusted Unarmed Damage+Grapple rules; undefined means the size/hand requirements fail. */
+	resolveGrapple(targetId: string): SavingThrowResult | undefined;
+	dealDamage(targetId: string, components: readonly DamageComponent[]): DamageResult;
+	/** Same-attack post-primary rider: critical copies and attack-wide reroll window, no weapon-only rerolls. */
+	dealAttackRiderDamage(targetId: string, components: readonly DamageComponent[]): DamageResult;
+	d20Mode(
+		first: number,
+		mode: { advantage: boolean; disadvantage: boolean },
+	): { advantage: boolean; disadvantage: boolean };
 	chooseWeaponRoll(candidates: readonly DamagePool[]): number;
 	choosePunctureDie(dice: readonly RolledDamageDie[]): string | null;
 	choosePiercerCriticalDie(dice: readonly RolledDamageDie[]): string | null;
@@ -158,6 +282,27 @@ export type TriggeredAttack = { targetId: string; source: string };
 export type CombatHook = {
 	id: string;
 	featName?: FeatName;
+	/** Passive pools, called once per participant when an engine is created. */
+	resourceDefinitions?: (definition: CombatantDefinition) => readonly ResourceDefinition[];
+	featureActions?: (ctx: FeatureActionContext) => readonly FeatureAction[];
+	rollDie?: (ctx: RollContext, roll: Readonly<{ sides: number; value: number; kind: RollKind }>) => number;
+	d20Mode?: (
+		ctx: RollContext,
+		first: number,
+		mode: Readonly<{ advantage: boolean; disadvantage: boolean }>,
+	) => { advantage: boolean; disadvantage: boolean };
+	startTurn?: (ctx: FeatureActionContext) => void;
+	endTurn?: (ctx: FeatureActionContext) => void;
+	onElapsedTime?: (ctx: TurnContext & { actorId: string }, minutes: number) => void;
+	onInitiative?: (ctx: RollContext) => void;
+	beforeAttack?: (ctx: AttackContext) => void;
+	prepareAttack?: (ctx: AttackContext, modifier: TCombatModifier) => TCombatModifier;
+	afterHitDamage?: (ctx: HitContext, result: AttackResult) => void;
+	/** Primary damage has been applied, including Graze; precedes ordered afterAttack triggers. */
+	afterPrimaryDamage?: (ctx: AttackContext, result: AttackResult) => void;
+	afterHit?: (ctx: HitContext) => HitResult;
+	ignoreResistance?: (ctx: RollContext, targetId: string, damageType: DamageType) => boolean;
+	afterSavingThrow?: (ctx: SaveEventContext, result: SavingThrowResult) => SavingThrowResult;
 	applies?: (ctx: AttackContext) => boolean;
 	attackModifiers?: (ctx: AttackContext) => readonly TCombatModifier[];
 	weaponDamage?: (ctx: HitContext, pool: DamagePool) => DamagePool;

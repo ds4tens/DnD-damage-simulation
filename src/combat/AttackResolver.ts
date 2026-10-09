@@ -1,12 +1,21 @@
 import BaseCharacter from "../character/BaseCharacter.ts";
+import { assessBenefitSupport } from "../character/FeatureSupport.ts";
+import { endRage, extendRage, isReckless } from "../classes/BarbarianState.ts";
 import type { DiceRoller } from "../dice/RandomSource.ts";
-import { featCombatHooks } from "../feats/Feats.ts";
+import { featCombatHooks, getFeatMetadata } from "../feats/Feats.ts";
 import { weaponMasteryRegistry } from "../Items/Weapon/WeaponMastery.ts";
 import type Weapon from "../Items/Weapon.ts";
 import { conditionRegistry } from "../modifiers/Conditions.ts";
 import { mergeCombatModifiers, type TCombatModifier } from "../modifiers/Modifiers.ts";
+import {
+	type CompleteRestResult,
+	type PersistentCombatantState,
+	type RecoveryEvent,
+	recoverResources,
+} from "./CombatResources.ts";
 import type {
 	AttackActionHandle,
+	AttackActionOptions,
 	AttackActionResult,
 	AttackContext,
 	AttackGrant,
@@ -15,16 +24,28 @@ import type {
 	AttackSelection,
 	AttackSnapshot,
 	CleaveCandidate,
+	CombatDamageEvent,
 	CombatEngineOptions,
 	CombatHook,
+	DecisionRecord,
+	FeatureAction,
+	FeatureActionChoice,
+	FeatureActionContext,
+	FeatureActionResult,
+	FeatureActionWindow,
+	FeatureSnapshot,
 	HitContext,
 	HitResult,
 	PreparedWeaponAttack,
+	RollContext,
+	RollKind,
 	TurnContext,
 	TurnStartResult,
+	UnarmedEffectResult,
+	UnarmedEffectSelection,
 } from "./CombatTypes.ts";
 import { allDamageDice, resolveDamage, rollDamageComponents, validateDamagePool } from "./DamageResolver.ts";
-import type { DamageComponent, DamagePool, RolledDamageDie } from "./DamageTypes.ts";
+import type { DamageComponent, DamagePool, DamageResult, RolledDamageDie } from "./DamageTypes.ts";
 import { damageTypes } from "./DamageTypes.ts";
 import { EncounterScheduler, type InitiativeOptions } from "./EncounterScheduler.ts";
 import type { EncounterState } from "./EncounterState.ts";
@@ -46,13 +67,46 @@ export function collectTurnConditionModifiers(ctx: TurnContext): TCombatModifier
 	);
 }
 export function collectAttackConditionModifiers(ctx: AttackContext): TCombatModifier[] {
+	const rangedAttack = ctx.request.mode !== "melee";
+	const crossbowExpert =
+		ctx.character?.feats.some((feat) => feat.name === "crossbow-expert") &&
+		ctx.weapon &&
+		["hand-crossbow", "light-crossbow", "heavy-crossbow"].includes(ctx.weapon.id);
+	const sharpshooter =
+		ctx.character?.feats.some((feat) => feat.name === "sharpshooter") && ctx.weapon?.category === "ranged";
+	const nearbyEnemy =
+		rangedAttack &&
+		!crossbowExpert &&
+		!sharpshooter &&
+		ctx.encounter.ids.some((id) => {
+			if (
+				id === ctx.request.actorId ||
+				ctx.encounter.state(id).lifeState === "dead" ||
+				ctx.encounter
+					.state(id)
+					.conditions.some((condition) =>
+						["incapacitated", "paralyzed", "stunned", "unconscious"].includes(condition.name),
+					)
+			)
+				return false;
+			const distance = id === ctx.request.targetId ? ctx.distance : ctx.distanceTo(id);
+			return distance !== undefined && distance <= 5 && (ctx.canSee?.(id, ctx.request.actorId) ?? true);
+		});
 	return [
+		...(ctx.character &&
+		ctx.character.armorCategory !== "none" &&
+		!ctx.character.armorTrained &&
+		(ctx.attackAbility === "strength" || ctx.attackAbility === "dexterity")
+			? [{ source: "armor.untrained", attackRoll: { disadvantage: 1 } }]
+			: []),
+		...(nearbyEnemy ? [{ source: "attack.ranged-nearby-enemy", attackRoll: { disadvantage: 1 } }] : []),
 		...ctx.actorState.conditions.flatMap(
 			(condition) => conditionRegistry[condition.name].getOutgoingAttackModifiers?.(condition, ctx) ?? [],
 		),
 		...ctx.targetState.conditions.flatMap(
 			(condition) => conditionRegistry[condition.name].getIncomingAttackModifiers?.(condition, ctx) ?? [],
 		),
+		...(isReckless(ctx.targetState) ? [{ source: "barbarian.reckless-incoming", attackRoll: { advantage: 1 } }] : []),
 		...(ctx.encounter.hasAttackDisadvantage(ctx.request.actorId)
 			? [{ source: "effect.outgoing-disadvantage", attackRoll: { disadvantage: 1 } }]
 			: []),
@@ -66,17 +120,22 @@ export function collectAttackConditionModifiers(ctx: AttackContext): TCombatModi
 export function rollAttackD20(
 	modifier: TCombatModifier,
 	roller: DiceRoller,
+	modifyMode?: (
+		first: number,
+		mode: { advantage: boolean; disadvantage: boolean },
+	) => { advantage: boolean; disadvantage: boolean },
 ): { natural: number; rolls: readonly number[] } {
-	const advantage = (modifier.attackRoll?.advantage ?? 0) > 0;
-	const disadvantage = (modifier.attackRoll?.disadvantage ?? 0) > 0;
+	let advantage = (modifier.attackRoll?.advantage ?? 0) > 0;
+	let disadvantage = (modifier.attackRoll?.disadvantage ?? 0) > 0;
 	const first = roller.roll(20);
+	if (modifyMode) ({ advantage, disadvantage } = modifyMode(first, { advantage, disadvantage }));
 	if (advantage === disadvantage) return { natural: first, rolls: [first] };
 	const second = roller.roll(20);
 	return { natural: advantage ? Math.max(first, second) : Math.min(first, second), rolls: [first, second] };
 }
 /** Basic Rules 2024 Rules Glossary, Attack Roll/Critical Hit; verified 2026-10-08. */
 export function resolveHit(ctx: AttackContext, modifier: TCombatModifier): HitResult {
-	const { natural, rolls } = rollAttackD20(modifier, ctx.roller);
+	const { natural, rolls } = rollAttackD20(modifier, ctx.roller, ctx.d20Mode);
 	const character = ctx.character;
 	const bonus =
 		ctx.preparedWeapon?.attackBonus ??
@@ -103,9 +162,11 @@ export class CombatEngine {
 	readonly encounter: EncounterState;
 	private readonly strategy: CombatStrategy;
 	private readonly hooks: readonly CombatHook[];
+	private readonly classHooks = new Map<string, readonly CombatHook[]>();
+	private readonly featLimitations = new Map<string, readonly string[]>();
 	private readonly actions = new Map<
 		AttackActionHandle,
-		{ remaining: number; attacks: AttackResult[]; closed: boolean }
+		{ remaining: number; attacks: AttackResult[]; unarmedEffects: UnarmedEffectResult[]; closed: boolean }
 	>();
 	private readonly grants = new Map<
 		AttackGrant,
@@ -113,8 +174,29 @@ export class CombatEngine {
 	>();
 	private readonly lightOpportunities = new Map<string, { action: AttackActionHandle; sourceInstances: Set<string> }>();
 	private nextActionId = 1;
+	private lastCompletedAttackAction: { actorId: string; turnId: number; actionId: string } | undefined;
 	private nextGrantId = 1;
+	private nextRollTestId = 1;
+	private readonly featureDamageProfiles = new WeakMap<AttackGrant, NonNullable<FeatureAction["attackDamage"]>>();
 	private scheduler: EncounterScheduler | undefined;
+	private initiativeProcessed = false;
+	private readonly damageLedger: CombatDamageEvent[] = [];
+	get damageEvents(): readonly CombatDamageEvent[] {
+		return freezeSnapshot(structuredClone(this.damageLedger));
+	}
+	private damage(actorId: string, targetId: string, pool: DamagePool, source: string, critical = false) {
+		const ignoredResistances = pool
+			.map((component) => component.damageType)
+			.filter((type) =>
+				this.hooksForActor(actorId).some((hook) =>
+					hook.ignoreResistance?.(this.rollContext(actorId, "damage"), targetId, type),
+				),
+			);
+		const result = resolveDamage(this.encounter, targetId, pool, { critical, ignoredResistances });
+		this.releaseInvalidGrapples();
+		this.damageLedger.push({ actorId, targetId, source, result: structuredClone(result) });
+		return result;
+	}
 	constructor(
 		encounter: EncounterState,
 		private readonly options: CombatEngineOptions,
@@ -128,13 +210,26 @@ export class CombatEngine {
 		for (const hook of customHooks) registered.set(hook.id, hook);
 		this.hooks = [...registered.values()];
 		for (const id of encounter.ids) {
-			validateMasterySelections(encounter, id);
 			const definition = encounter.definition(id);
 			if (definition instanceof BaseCharacter)
-				for (const feat of definition.feats) {
-					if (feat.name !== "ability-score-improvement" && !this.hooks.some((hook) => hook.featName === feat.name))
-						throw new Error(`Unsupported combat feat: ${feat.name}`);
-				}
+				this.classHooks.set(
+					id,
+					definition.characterClass.getCombatHooks(definition.level).filter((hook) => !hookIds.includes(hook.id)),
+				);
+		}
+		for (const id of encounter.ids) {
+			validateMasterySelections(encounter, id);
+			const definition = encounter.definition(id);
+			if (definition instanceof BaseCharacter) {
+				const support = assessBenefitSupport(definition.feats.flatMap((feat) => getFeatMetadata(feat.name).benefits));
+				this.featLimitations.set(
+					id,
+					support.limitations.map((benefit) => benefit.id),
+				);
+			}
+			for (const hook of this.hooksForActor(id))
+				for (const resource of hook.resourceDefinitions?.(definition) ?? []) encounter.initializeResource(id, resource);
+			encounter.validateInitialResources(id);
 		}
 	}
 	beginTurn(ownerId: string): TurnStartResult {
@@ -144,11 +239,20 @@ export class CombatEngine {
 	}
 	endTurn(): void {
 		if (this.scheduler) throw new Error("Manual and scheduled turns cannot mix");
+		this.closeTurn();
+	}
+	private closeTurn(): void {
+		const actorId = this.encounter.turn.ownerId;
+		const ctx = this.featureContext(actorId, "after-attack", []);
+		for (const hook of this.hooksForActor(actorId)) hook.endTurn?.(ctx);
+		this.releaseInvalidGrapples();
 		this.encounter.endTurn();
 	}
 	private openTurn(ownerId: string): TurnStartResult {
 		const turn = this.encounter.beginTurn(ownerId);
+		this.releaseInvalidGrapples();
 		const state = this.encounter.state(ownerId);
+		for (const hook of this.hooksForActor(ownerId)) hook.startTurn?.(this.featureContext(ownerId, "before-attack", []));
 		return {
 			ownerId,
 			turnId: turn.id,
@@ -183,10 +287,338 @@ export class CombatEngine {
 	}
 	endScheduledTurn(scheduler: EncounterScheduler): void {
 		if (this.scheduler !== scheduler) throw new Error("Invalid scheduled turn");
-		this.encounter.endTurn();
+		this.closeTurn();
 	}
 	resolveSavingThrow(request: SavingThrowRequest) {
-		return resolveSavingThrow(this.encounter, request, this.options.roller);
+		let result = resolveSavingThrow(
+			this.encounter,
+			request,
+			this.actorRoller(request.targetId, "saving-throw"),
+			(first, mode) => this.modifyD20Mode(request.targetId, "saving-throw", first, mode),
+		);
+		for (const actorId of this.encounter.ids)
+			for (const hook of this.hooksForActor(actorId))
+				result =
+					hook.afterSavingThrow?.(
+						{
+							...this.rollContext(actorId, "saving-throw", undefined, { savingThrow: result }),
+							request: Object.freeze({ ...request }),
+						},
+						result,
+					) ?? result;
+		return result;
+	}
+	private grapple(
+		actorId: string,
+		targetId: string,
+		save: (request: SavingThrowRequest) => ReturnType<typeof resolveSavingThrow>,
+	) {
+		const actor = this.encounter.definition(actorId);
+		const target = this.encounter.definition(targetId);
+		const state = this.encounter.state(actorId);
+		const targetState = this.encounter.state(targetId);
+		const sizeOrder = ["tiny", "small", "medium", "large", "huge", "gargantuan"];
+		const hand = state.hands.left === null ? "left" : state.hands.right === null ? "right" : undefined;
+		if (
+			actorId === targetId ||
+			!hand ||
+			!this.canAct(actorId) ||
+			targetState.lifeState === "dead" ||
+			sizeOrder.indexOf(this.encounter.size(targetId)) > sizeOrder.indexOf(this.encounter.size(actorId)) + 1
+		)
+			return undefined;
+		const distance = this.options.distanceFor?.(actorId, targetId);
+		if (distance !== undefined && distance > 5) return undefined;
+		const ability =
+			target.getSavingThrowBonus("dexterity") > target.getSavingThrowBonus("strength") ? "dexterity" : "strength";
+		const result = save({
+			targetId,
+			ability,
+			dc: 8 + actor.getStatModifier("strength") + actor.getProficiencyBonus(),
+			source: "unarmed.grapple",
+		});
+		if (!result.success) {
+			state.hands[hand] = `$grapple:${targetId}`;
+			targetState.grappledBy = actorId;
+			targetState.conditions = targetState.conditions.filter((condition) => condition.name !== "grappled");
+			targetState.conditions.push({ name: "grappled", sourceId: actorId });
+		}
+		return result;
+	}
+	private hooksForActor(actorId: string): readonly CombatHook[] {
+		const actor = this.encounter.definition(actorId);
+		return [...(this.classHooks.get(actorId) ?? []), ...this.hooks].filter(
+			(hook) =>
+				hook.featName === undefined ||
+				(actor instanceof BaseCharacter && actor.feats.some((feat) => feat.name === hook.featName)),
+		);
+	}
+	private featureSnapshot(
+		actorId: string,
+		window: FeatureSnapshot["window"],
+		roll?: FeatureSnapshot["roll"],
+		savingThrow?: FeatureSnapshot["savingThrow"],
+	): Readonly<FeatureSnapshot> {
+		const active = this.encounter.hasActiveTurn;
+		return freezeSnapshot({
+			actor: this.encounter.snapshot(actorId),
+			targets: this.encounter.ids.filter((id) => id !== actorId).map((id) => this.encounter.snapshot(id)),
+			turnId: active ? this.encounter.turn.id : null,
+			turnOwnerId: active ? this.encounter.turn.ownerId : null,
+			window,
+			actionAvailable: active && this.encounter.canUseAction(actorId),
+			bonusActionAvailable: active && this.encounter.canUseBonusAction(actorId),
+			...(roll ? { roll: { ...roll } } : {}),
+			...(savingThrow ? { savingThrow: structuredClone(savingThrow) } : {}),
+		});
+	}
+	private chooseOption(
+		snapshot: Readonly<FeatureSnapshot | AttackSnapshot>,
+		featureId: string,
+		candidates: readonly string[],
+	): string | null {
+		const choice = this.strategy.chooseFeatureOption(snapshot, featureId, Object.freeze([...candidates]));
+		if (choice !== null && !candidates.includes(choice)) throw new Error(`Invalid feature option: ${featureId}`);
+		return choice;
+	}
+	private rollContext(
+		actorId: string,
+		kind: RollKind,
+		roll?: FeatureSnapshot["roll"],
+		extra: Partial<Pick<RollContext, "rollTest" | "forgoAdvantage" | "savingThrow">> = {},
+	): RollContext {
+		return {
+			actorId,
+			actor: this.encounter.definition(actorId),
+			encounter: this.encounter,
+			roller: this.options.roller,
+			kind,
+			...extra,
+			distanceTo: (targetId) => this.options.distanceFor?.(actorId, targetId),
+			useFeature: (id) => {
+				const choice = this.strategy.useOptionalFeature(
+					this.featureSnapshot(actorId, kind === "initiative" ? "initiative" : "roll", roll, extra.savingThrow),
+					id,
+				);
+				if (typeof choice !== "boolean") throw new Error("Invalid optional feature choice");
+				return choice;
+			},
+			chooseOption: (id, candidates) =>
+				this.chooseOption(this.featureSnapshot(actorId, "roll", roll, extra.savingThrow), id, candidates),
+		};
+	}
+	actorRoller(actorId: string, kind: RollKind): DiceRoller {
+		const id = `roll:${this.nextRollTestId++}`;
+		let dieIndex = 0;
+		return {
+			roll: (sides) => {
+				let value = this.options.roller.roll(sides);
+				const rollTest = { id, dieIndex: dieIndex++ };
+				for (const hook of this.hooksForActor(actorId)) {
+					value =
+						hook.rollDie?.(
+							this.rollContext(actorId, kind, { sides, value, kind }, { rollTest }),
+							Object.freeze({ sides, value, kind }),
+						) ?? value;
+					if (!Number.isSafeInteger(value) || value < 1 || value > sides)
+						throw new Error("Invalid feature die replacement");
+				}
+				return value;
+			},
+		};
+	}
+	modifyD20Mode(
+		actorId: string,
+		kind: RollKind,
+		first: number,
+		mode: { advantage: boolean; disadvantage: boolean },
+		forgoAdvantage = false,
+	) {
+		let result = { ...mode };
+		for (const hook of this.hooksForActor(actorId))
+			result =
+				hook.d20Mode?.(
+					this.rollContext(actorId, kind, { sides: 20, value: first, kind }, { forgoAdvantage }),
+					first,
+					Object.freeze({ ...result }),
+				) ?? result;
+		if (typeof result.advantage !== "boolean" || typeof result.disadvantage !== "boolean")
+			throw new Error("Invalid D20 mode");
+		return forgoAdvantage ? { ...result, advantage: false } : result;
+	}
+	processScheduledInitiative(scheduler: EncounterScheduler): void {
+		if (this.scheduler !== scheduler || this.initiativeProcessed)
+			throw new Error("Invalid or repeated Initiative event");
+		this.initiativeProcessed = true;
+		for (const result of scheduler.initiative)
+			if (result.natural !== null)
+				for (const hook of this.hooksForActor(result.actorId))
+					hook.onInitiative?.(this.rollContext(result.actorId, "initiative"));
+	}
+	private featureContext(
+		actorId: string,
+		window: FeatureActionWindow,
+		decisions: DecisionRecord[],
+	): FeatureActionContext {
+		return {
+			actorId,
+			actor: this.encounter.definition(actorId),
+			encounter: this.encounter,
+			roller: this.actorRoller(actorId, "feature"),
+			window,
+			...(this.lastCompletedAttackAction?.actorId === actorId &&
+			this.encounter.hasActiveTurn &&
+			this.lastCompletedAttackAction.turnId === this.encounter.turn.id
+				? { completedAttackActionId: this.lastCompletedAttackAction.actionId }
+				: {}),
+			useFeature: (id) => {
+				const choice = this.strategy.useOptionalFeature(this.featureSnapshot(actorId, window), id);
+				if (typeof choice !== "boolean") throw new Error("Invalid optional feature choice");
+				decisions.push({ feature: id, choice });
+				return choice;
+			},
+			chooseOption: (id, candidates) => {
+				const choice = this.chooseOption(this.featureSnapshot(actorId, window), id, candidates);
+				decisions.push({ feature: id, choice });
+				return choice;
+			},
+			resolveSavingThrow: (request) => {
+				if (request.targetId !== actorId) extendRage(this.encounter.state(actorId));
+				return this.resolveSavingThrow(request);
+			},
+			dealDamage: (targetId, components) =>
+				this.damage(
+					actorId,
+					targetId,
+					rollDamageComponents(components, false, this.actorRoller(actorId, "damage")),
+					components.map((component) => component.source).join("+"),
+				),
+			distanceTo: (targetId) => this.options.distanceFor?.(actorId, targetId),
+		};
+	}
+	private featureActions(
+		actorId: string,
+		window: FeatureActionWindow,
+		ctx: FeatureActionContext,
+	): readonly FeatureAction[] {
+		if (!this.canAct(actorId) || this.encounter.turn.ownerId !== actorId) return [];
+		return this.hooksForActor(actorId)
+			.flatMap((hook) => hook.featureActions?.(ctx) ?? [])
+			.filter(
+				(action) =>
+					!this.encounter.hasUsed(actorId, `feature-action.${window}.${action.id}`) &&
+					(action.cost !== "action" || this.encounter.canUseAction(actorId)) &&
+					(action.cost !== "bonus-action" || this.encounter.canUseBonusAction(actorId)) &&
+					(action.validate?.(ctx) ?? true),
+			);
+	}
+	resolveFeatureActions(actorId: string, window: FeatureActionWindow): readonly FeatureActionResult[] {
+		const results: FeatureActionResult[] = [];
+		for (let guard = 0; guard < 32; guard++) {
+			const decisions: DecisionRecord[] = [];
+			const ctx = this.featureContext(actorId, window, decisions);
+			const actions = this.featureActions(actorId, window, ctx);
+			if (actions.length === 0) break;
+			if (new Set(actions.map((action) => action.id)).size !== actions.length)
+				throw new Error("Duplicate feature action IDs");
+			const candidates: FeatureActionChoice[] = actions.map(({ id, cost, targetId, purpose }) => ({
+				id,
+				cost,
+				...(targetId ? { targetId } : {}),
+				...(purpose ? { purpose } : {}),
+			}));
+			const id = this.strategy.chooseFeatureAction(this.featureSnapshot(actorId, window), freezeSnapshot(candidates));
+			if (id === null) break;
+			const action = actions.find((candidate) => candidate.id === id);
+			if (!action) throw new Error("Invalid feature action choice");
+			const attacks: AttackResult[] = [];
+			if (action.cost !== "none") this.lastCompletedAttackAction = undefined;
+			if (action.attack) {
+				if (action.cost !== "bonus-action") throw new Error("Feature attack must use Bonus Action");
+				const request = this.normalized({ ...action.attack, actorId, actionSource: "bonus-action" });
+				this.validateAttack(request);
+				const grant = this.issueGrant(request);
+				if (action.attackDamage) this.featureDamageProfiles.set(grant, structuredClone(action.attackDamage));
+				attacks.push(this.resolveSingleAttack({ ...request, grant }, id));
+			} else {
+				if (action.cost === "action") this.encounter.spendAction(actorId);
+				if (action.cost === "bonus-action") this.encounter.spendBonusAction(actorId);
+			}
+			this.encounter.markUsed(actorId, `feature-action.${window}.${id}`);
+			action.execute?.(ctx);
+			decisions.push({ feature: id, choice: true });
+			results.push({ featureId: id, actorId, decisions, attacks });
+		}
+		return structuredClone(results);
+	}
+	exportPersistentState(actorId: string): PersistentCombatantState {
+		return freezeSnapshot({
+			resources: this.encounter.resourceSnapshot(actorId),
+			classState: Object.fromEntries(
+				Object.entries(this.encounter.state(actorId).classState).filter(([key]) => key.startsWith("persistent.")),
+			),
+			spentWeaponInstanceIds: [...this.encounter.state(actorId).spentWeaponInstanceIds],
+		});
+	}
+	recoverResources(actorId: string, event: RecoveryEvent) {
+		if (this.encounter.hasActiveTurn) throw new Error("Recovery requires no active turn");
+		return recoverResources(this.encounter, actorId, event);
+	}
+	/** Completed rest event: no duration/interruption or Hit Dice healing simulation. */
+	completeRest(actorId: string, event: RecoveryEvent): CompleteRestResult {
+		if (this.encounter.hasActiveTurn || !["short-rest", "long-rest"].includes(event))
+			throw new Error("Invalid completed rest event");
+		const state = this.encounter.state(actorId);
+		if (state.lifeState === "dead" || state.hitPoints < 1)
+			throw new Error("A completed rest requires a living participant with at least 1 HP");
+		const previousHp = state.hitPoints;
+		const previousTemporaryHp = state.temporaryHp;
+		const resources = this.recoverResources(actorId, event);
+		endRage(state);
+		if (state.barbarian) delete state.barbarian.recklessExpiresOwnTurn;
+		if (event === "long-rest") {
+			heal(this.encounter, actorId, this.encounter.definition(actorId).hitPoints);
+			state.temporaryHp = 0;
+		}
+		return freezeSnapshot({
+			actorId,
+			event,
+			resources,
+			health: {
+				previousHp,
+				currentHp: state.hitPoints,
+				previousTemporaryHp,
+				currentTemporaryHp: state.temporaryHp,
+				hpRegained: state.hitPoints - previousHp,
+			},
+		});
+	}
+	advanceElapsedTime(minutes: number): void {
+		if (this.encounter.hasActiveTurn || !Number.isFinite(minutes) || minutes < 0 || (minutes > 0 && minutes < 10))
+			throw new Error("Elapsed time requires no active turn and a gap of at least 10 minutes");
+		if (minutes === 0) return;
+		this.encounter.expireTimedEffects();
+		for (const id of this.encounter.ids) {
+			const state = this.encounter.state(id);
+			endRage(state);
+			if (state.barbarian) delete state.barbarian.recklessExpiresOwnTurn;
+			for (const hook of this.hooksForActor(id))
+				hook.onElapsedTime?.(
+					{ actorId: id, actor: this.encounter.definition(id), actorState: state, encounter: this.encounter },
+					minutes,
+				);
+		}
+	}
+	standUp(actorId: string): boolean {
+		if (this.encounter.turn.ownerId !== actorId || !this.canAct(actorId)) return false;
+		this.releaseInvalidGrapples();
+		const speed = this.encounter.effectiveSpeed(actorId);
+		if (speed <= 0 || this.encounter.turn.movementSpent + speed / 2 > speed) return false;
+		const state = this.encounter.state(actorId);
+		if (!state.conditions.some((condition) => condition.name === "prone")) return false;
+		this.encounter.turn.movementSpent += speed / 2;
+		state.conditions = state.conditions.filter((condition) => condition.name !== "prone");
+		return true;
 	}
 	heal(targetId: string, amount: number) {
 		return heal(this.encounter, targetId, amount);
@@ -220,8 +652,118 @@ export class CombatEngine {
 			turnId: this.encounter.turn.id,
 		});
 		this.encounter.spendAction(actorId);
-		this.actions.set(handle, { remaining, attacks: [], closed: false });
+		this.lastCompletedAttackAction = undefined;
+		this.actions.set(handle, { remaining, attacks: [], unarmedEffects: [], closed: false });
 		return handle;
+	}
+	/** Releasing your own grapple is free and does not resolve another saving throw. */
+	releaseGrapple(actorId: string, targetId: string): boolean {
+		const target = this.encounter.state(targetId);
+		if (target.grappledBy !== actorId) return false;
+		delete target.grappledBy;
+		target.conditions = target.conditions.filter(
+			(condition) => !(condition.name === "grappled" && condition.sourceId === actorId),
+		);
+		const hands = this.encounter.state(actorId).hands;
+		for (const hand of ["left", "right"] as const) if (hands[hand] === `$grapple:${targetId}`) hands[hand] = null;
+		return true;
+	}
+	/** Basic Rules2024 Grappling: Incapacitated grapplers immediately release their targets. */
+	private releaseInvalidGrapples(): void {
+		for (const targetId of this.encounter.ids) {
+			const actorId = this.encounter.state(targetId).grappledBy;
+			if (!actorId) continue;
+			const owner = this.encounter.state(actorId);
+			const distance = this.options.distanceFor?.(actorId, targetId);
+			if (
+				owner.lifeState !== "alive" ||
+				owner.conditions.some((condition) =>
+					["incapacitated", "paralyzed", "stunned", "unconscious"].includes(condition.name),
+				) ||
+				(distance !== undefined && distance > 5)
+			)
+				this.releaseGrapple(actorId, targetId);
+		}
+	}
+	private unarmedEffectEligible(actorId: string, selection: UnarmedEffectSelection): boolean {
+		const state = this.encounter.state(actorId);
+		const targetState = this.encounter.state(selection.targetId);
+		const sizes = ["tiny", "small", "medium", "large", "huge", "gargantuan"];
+		const distance = this.options.distanceFor?.(actorId, selection.targetId);
+		return (
+			this.canAct(actorId) &&
+			actorId !== selection.targetId &&
+			targetState.lifeState !== "dead" &&
+			(distance === undefined || distance <= 5) &&
+			sizes.indexOf(this.encounter.size(selection.targetId)) <= sizes.indexOf(this.encounter.size(actorId)) + 1 &&
+			(selection.effect === "shove-prone" ||
+				(targetState.grappledBy !== actorId && (state.hands.left === null || state.hands.right === null)))
+		);
+	}
+	legalUnarmedEffectCandidates(actorId: string, preferredTargetId: string): readonly UnarmedEffectSelection[] {
+		if (this.encounter.turn.ownerId !== actorId) return [];
+		return freezeSnapshot(
+			this.encounter.ids
+				.filter((id) => id !== actorId)
+				.sort((left, right) => Number(right === preferredTargetId) - Number(left === preferredTargetId))
+				.flatMap((targetId) => (["shove-prone", "grapple"] as const).map((effect) => ({ targetId, effect })))
+				.filter((selection) => this.unarmedEffectEligible(actorId, selection)),
+		);
+	}
+	/** Unarmed save-based replacements consume attack slots, never attack-roll windows. */
+	resolveUnarmedEffectInAction(action: AttackActionHandle, selection: UnarmedEffectSelection): UnarmedEffectResult {
+		const entry = this.actionEntry(action);
+		if (
+			this.encounter.turn.ownerId !== action.actorId ||
+			entry.remaining < 1 ||
+			!["grapple", "shove-prone"].includes(selection.effect) ||
+			!this.unarmedEffectEligible(action.actorId, selection)
+		)
+			throw new Error("Illegal Unarmed effect or unavailable attack slot");
+		entry.remaining--;
+		const attack = this.encounter.nextAttack(action.actorId);
+		const actor = this.encounter.definition(action.actorId);
+		const target = this.encounter.definition(selection.targetId);
+		const save = (request: SavingThrowRequest) => {
+			extendRage(this.encounter.state(action.actorId));
+			return this.resolveSavingThrow(request);
+		};
+		const handBefore = { ...this.encounter.state(action.actorId).hands };
+		const savingThrow =
+			selection.effect === "grapple"
+				? this.grapple(action.actorId, selection.targetId, save)
+				: save({
+						targetId: selection.targetId,
+						ability:
+							target.getSavingThrowBonus("dexterity") > target.getSavingThrowBonus("strength")
+								? "dexterity"
+								: "strength",
+						dc: 8 + actor.getStatModifier("strength") + actor.getProficiencyBonus(),
+						source: "unarmed.shove-prone",
+					});
+		if (!savingThrow) throw new Error("Validated Unarmed effect became unavailable");
+		if (
+			selection.effect === "shove-prone" &&
+			!savingThrow.success &&
+			!this.encounter.state(selection.targetId).conditions.some((condition) => condition.name === "prone")
+		)
+			this.encounter.state(selection.targetId).conditions.push({ name: "prone", sourceId: action.actorId });
+		const handReserved = (["left", "right"] as const).find(
+			(hand) => handBefore[hand] !== this.encounter.state(action.actorId).hands[hand],
+		);
+		const result: UnarmedEffectResult = {
+			...selection,
+			effectId: attack.id,
+			actorId: action.actorId,
+			turnId: this.encounter.turn.id,
+			actionId: action.id,
+			attackIndexInTurn: attack.index,
+			savingThrow,
+			applied: !savingThrow.success,
+			...(handReserved ? { handReserved } : {}),
+		};
+		entry.unarmedEffects.push(result);
+		return structuredClone(result);
 	}
 	attackInAction(action: AttackActionHandle, selection: AttackSelection): AttackResult {
 		return this.resolveSingleAttack({ ...selection, actorId: action.actorId, actionSource: "attack-action", action });
@@ -229,14 +771,23 @@ export class CombatEngine {
 	finishAttackAction(action: AttackActionHandle): AttackActionResult {
 		const entry = this.actionEntry(action);
 		entry.closed = true;
+		this.lastCompletedAttackAction = { actorId: action.actorId, turnId: action.turnId, actionId: action.id };
 		const total = (attack: AttackResult): number =>
-			(attack.damage?.appliedDamage ?? 0) + attack.triggeredAttacks.reduce((sum, child) => sum + total(child), 0);
+			(attack.damage?.appliedDamage ?? 0) +
+			(attack.additionalDamage ?? []).reduce((sum, damage) => sum + damage.appliedDamage, 0) +
+			attack.triggeredAttacks.reduce((sum, child) => sum + total(child), 0);
 		return structuredClone({
 			totalDamage: entry.attacks.reduce((sum, attack) => sum + total(attack), 0),
 			attacks: entry.attacks,
+			...(entry.unarmedEffects.length ? { unarmedEffects: entry.unarmedEffects } : {}),
 		});
 	}
-	private actionEntry(action: AttackActionHandle): { remaining: number; attacks: AttackResult[]; closed: boolean } {
+	private actionEntry(action: AttackActionHandle): {
+		remaining: number;
+		attacks: AttackResult[];
+		unarmedEffects: UnarmedEffectResult[];
+		closed: boolean;
+	} {
 		const entry = this.actions.get(action);
 		if (
 			!entry ||
@@ -293,6 +844,7 @@ export class CombatEngine {
 			request.ability,
 			request.grip,
 			request.equip,
+			request.equipAdditional,
 		]);
 	}
 	private validateAttack(request: AttackRequest): void {
@@ -300,6 +852,8 @@ export class CombatEngine {
 		if (!["melee", "ranged", "thrown"].includes(request.mode)) throw new Error("Invalid attack mode");
 		if (!this.isAttackLegal(request)) throw new Error("Illegal attack request");
 		if (!this.canAct(request.actorId)) throw new Error("Actor cannot take actions");
+		if (request.equipAdditional && !request.weapon && !request.weaponInstanceId)
+			throw new Error("Quick Draw requires a physical weapon attack");
 		if (request.profile) {
 			if (!Number.isFinite(request.profile.attackBonus) || !Array.isArray(request.profile.damage))
 				throw new Error("Invalid attack profile");
@@ -442,6 +996,14 @@ export class CombatEngine {
 		if (request.weapon) this.validateWeapon(request.weapon);
 		this.validateWeapon(selectWeaponInstance(this.encounter, request).weapon);
 		const prepared = prepareWeaponAttack(this.encounter, request);
+		const override = request.grant ? this.featureDamageProfiles.get(request.grant) : undefined;
+		if (override)
+			prepared.damageComponents = prepared.damageComponents.map((component) => ({
+				...component,
+				dice: [...override.dice],
+				damageType: override.damageType,
+				flatBonus: override.suppressPositiveAbility ? Math.min(0, component.flatBonus) : component.flatBonus,
+			}));
 		this.validateComponents(prepared.damageComponents);
 		if (!Number.isFinite(prepared.attackBonus)) throw new Error("Invalid weapon attack bonus");
 		if (prepared.loadingKey && this.encounter.hasActiveTurn && this.encounter.turn.loadingUsed.has(prepared.loadingKey))
@@ -461,6 +1023,11 @@ export class CombatEngine {
 				return false;
 			if (request.distance !== undefined && (!Number.isFinite(request.distance) || request.distance < 0)) return false;
 			if (!request.weapon && !request.weaponInstanceId && !request.profile) return false;
+			if (
+				request.profile?.damage.some((component) => component.origin === "unarmed") &&
+				(request.mode !== "melee" || (request.distance ?? 5) > 5)
+			)
+				return false;
 			this.prepared(request);
 			return this.options.canAttack?.(request, this.encounter) ?? true;
 		} catch {
@@ -483,6 +1050,8 @@ export class CombatEngine {
 				? { weapon: { name: ctx.weapon.name, category: ctx.weapon.category, properties: [...ctx.weapon.properties] } }
 				: {}),
 			...(ctx.hit ? { hit: structuredClone(ctx.hit) } : {}),
+			attackAbility: ctx.attackAbility,
+			attackIndexInTurn: ctx.attackIndexInTurn,
 		});
 	}
 	private context(request: AttackRequest, attackIndexInTurn: number, prepared?: PreparedWeaponAttack): AttackContext {
@@ -490,9 +1059,11 @@ export class CombatEngine {
 		const character = attacker instanceof BaseCharacter ? attacker : undefined;
 		const ctx: AttackContext = {
 			encounter: this.encounter,
-			roller: this.options.roller,
+			roller: this.actorRoller(request.actorId, "attack"),
+			damageRoller: this.actorRoller(request.actorId, "damage"),
 			attacker,
 			character,
+			distanceTo: (targetId) => this.options.distanceFor?.(request.actorId, targetId),
 			canSee: (observerId, targetId) =>
 				this.options.canSee?.(observerId, targetId) ??
 				!this.encounter.state(targetId).conditions.some((condition) => condition.name === "invisible"),
@@ -508,9 +1079,49 @@ export class CombatEngine {
 			hasHitOccurredThisTurn: this.encounter.turn.hitActors.has(request.actorId),
 			...(request.distance === undefined ? {} : { distance: request.distance }),
 			decisions: [],
+			featureSelections: {},
 			isOwnTurn: this.encounter.turn.ownerId === request.actorId,
 			hasUsed: (feature) => this.encounter.hasUsed(request.actorId, feature),
 			markUsed: (feature) => this.encounter.markUsed(request.actorId, feature),
+			chooseOption: (feature, candidates) => {
+				const choice = this.chooseOption(this.snapshot(ctx), feature, candidates);
+				ctx.decisions.push({ feature, choice });
+				return choice;
+			},
+			resolveSavingThrow: (input) => {
+				if (input.targetId !== request.actorId) extendRage(this.encounter.state(request.actorId));
+				return this.resolveSavingThrow(input);
+			},
+			resolveGrapple: (targetId) => this.grapple(request.actorId, targetId, ctx.resolveSavingThrow),
+			dealDamage: (targetId, components) =>
+				this.damage(
+					request.actorId,
+					targetId,
+					rollDamageComponents(components, false, this.actorRoller(request.actorId, "damage")),
+					components.map((component) => component.source).join("+"),
+				),
+			dealAttackRiderDamage: (targetId, components) => {
+				if (!ctx.hit || !ctx.primaryDamage || ctx.primaryDamage.appliedDamage <= 0)
+					throw new Error("Attack rider requires positive primary attack damage");
+				let pool = rollDamageComponents(components, ctx.hit.isCrit, ctx.damageRoller);
+				for (const hook of this.activeHooks(ctx)) pool = hook.afterDamageRoll?.({ ...ctx, hit: ctx.hit }, pool) ?? pool;
+				validateDamagePool(pool);
+				return this.damage(
+					request.actorId,
+					targetId,
+					pool,
+					components.map((component) => component.source).join("+"),
+					ctx.hit.isCrit,
+				);
+			},
+			d20Mode: (first, mode) =>
+				this.modifyD20Mode(
+					request.actorId,
+					"attack",
+					first,
+					mode,
+					ctx.featureSelections["barbarian.brutal-strike"] === true,
+				),
 			useFeature: (feature) => {
 				const choice = this.strategy.useFeature(this.snapshot(ctx), feature);
 				if (typeof choice !== "boolean") throw new Error("Strategy must return a boolean feature choice");
@@ -584,7 +1195,7 @@ export class CombatEngine {
 			throw new Error("Invalid damage die choice");
 	}
 	private activeHooks(ctx: AttackContext): readonly CombatHook[] {
-		return this.hooks.filter(
+		return this.hooksForActor(ctx.request.actorId).filter(
 			(hook) =>
 				(hook.featName === undefined || ctx.character?.feats.some((feat) => feat.name === hook.featName)) &&
 				(hook.applies?.(ctx) ?? true),
@@ -600,7 +1211,10 @@ export class CombatEngine {
 		].every((modifier) => modifier.turn?.canAct?.(ctx) ?? true);
 	}
 	private weaponComponents(ctx: AttackContext): readonly DamageComponent[] {
-		if (ctx.request.profile) return ctx.request.profile.damage.filter((component) => component.origin === "weapon");
+		if (ctx.request.profile)
+			return ctx.request.profile.damage.filter(
+				(component) => component.origin === "weapon" || component.origin === "unarmed",
+			);
 		if (ctx.preparedWeapon) return ctx.preparedWeapon.damageComponents;
 		if (!ctx.weapon) return [];
 		return [
@@ -642,38 +1256,79 @@ export class CombatEngine {
 		if (prepared) {
 			this.encounter.state(request.actorId).hands = { ...prepared.nextHands };
 			if (prepared.loadingKey) this.encounter.turn.loadingUsed.add(prepared.loadingKey);
+			const ammunitionKind = prepared.instance.weapon.ammunitionKind;
+			if (ammunitionKind && this.encounter.state(request.actorId).resources[`ammunition.${ammunitionKind}`])
+				this.encounter.spendResource(request.actorId, `ammunition.${ammunitionKind}`);
 			if (prepared.thrownInstanceId)
 				this.encounter.state(request.actorId).spentWeaponInstanceIds.add(prepared.thrownInstanceId);
 			request = { ...request, weapon: prepared.instance.weapon, weaponInstanceId: prepared.instance.id };
 		}
 		const attack = this.encounter.nextAttack(request.actorId);
 		const ctx = this.context(request, attack.index, prepared);
+		const additionalDamage: DamageResult[] = [];
+		let resolvedAttack: AttackResult | undefined;
+		const savingThrows: ReturnType<typeof resolveSavingThrow>[] = [];
+		const originalDealDamage = ctx.dealDamage;
+		ctx.dealDamage = (targetId, components) => {
+			const result = originalDealDamage(targetId, components);
+			additionalDamage.push(result);
+			return result;
+		};
+		const originalRiderDamage = ctx.dealAttackRiderDamage;
+		ctx.dealAttackRiderDamage = (targetId, components) => {
+			const result = originalRiderDamage(targetId, components);
+			additionalDamage.push(result);
+			if (resolvedAttack && result.hp.reducedToZero) resolvedAttack.attackDamageReducedToZero = true;
+			return result;
+		};
+		const originalResolveSavingThrow = ctx.resolveSavingThrow;
+		ctx.resolveSavingThrow = (request) => {
+			const result = originalResolveSavingThrow(request);
+			savingThrows.push(result);
+			return result;
+		};
 		const hooks = this.activeHooks(ctx);
+		for (const hook of hooks) hook.beforeAttack?.(ctx);
 		const classModifiers = ctx.character?.characterClass.getAttackModifiers(ctx) ?? [];
-		const modifier = mergeCombatModifiers([
+		let modifier = mergeCombatModifiers([
 			...classModifiers,
 			...masteryAttackModifiers(ctx),
 			...(prepared?.attackModifiers ?? []),
 			...collectAttackConditionModifiers(ctx),
 			...hooks.flatMap((hook) => hook.attackModifiers?.(ctx) ?? []),
 		]);
+		for (const hook of hooks) modifier = hook.prepareAttack?.(ctx, modifier) ?? modifier;
+		this.encounter.turn.attackRollCounts.set(
+			request.actorId,
+			(this.encounter.turn.attackRollCounts.get(request.actorId) ?? 0) + 1,
+		);
 		this.encounter.consumeAttackEffects(request.actorId, request.targetId);
-		const hit = resolveHit(ctx, modifier);
+		let hit = resolveHit(ctx, modifier);
+		for (const hook of hooks) {
+			ctx.hit = hit;
+			hit = hook.afterHit?.({ ...ctx, hit }) ?? hit;
+		}
+		if (hit.isHit && modifier.hit?.forceCritOnHit) hit = { ...hit, isCrit: true };
 		ctx.hit = hit;
 		const hitCtx: HitContext = { ...ctx, hit };
 		let pool: DamagePool = [];
 		if (hit.isHit) {
-			pool = rollDamageComponents(this.weaponComponents(ctx), hit.isCrit, this.options.roller);
+			pool = rollDamageComponents(this.weaponComponents(ctx), hit.isCrit, this.actorRoller(request.actorId, "damage"));
 			for (const hook of hooks) pool = hook.weaponDamage?.(hitCtx, pool) ?? pool;
 			const classDamageModifiers = ctx.character?.characterClass.getDamageRollModifiers(hitCtx) ?? [];
 			const extraComponents: DamageComponent[] = [
-				...(request.profile?.damage.filter((component) => component.origin !== "weapon") ?? []),
+				...(request.profile?.damage.filter(
+					(component) => component.origin !== "weapon" && component.origin !== "unarmed",
+				) ?? []),
 				...[modifier, ...classDamageModifiers].flatMap(
 					(item) => item.damageRoll?.componentFns?.flatMap((fn) => fn(hitCtx)) ?? [],
 				),
 				...hooks.flatMap((hook) => hook.damageComponents?.(hitCtx) ?? []),
 			];
-			pool = [...pool, ...rollDamageComponents(extraComponents, hit.isCrit, this.options.roller)];
+			pool = [
+				...pool,
+				...rollDamageComponents(extraComponents, hit.isCrit, this.actorRoller(request.actorId, "damage")),
+			];
 			for (const hook of hooks) pool = hook.additionalCriticalDice?.(hitCtx, pool) ?? pool;
 			for (const hook of hooks) pool = hook.afterDamageRoll?.(hitCtx, pool) ?? pool;
 			validateDamagePool(pool);
@@ -685,12 +1340,13 @@ export class CombatEngine {
 				...(modifier.miss?.componentFns?.flatMap((fn) => fn(hitCtx)) ?? []),
 				...masteryMissComponents(ctx),
 			];
-			pool = rollDamageComponents(missComponents, false, this.options.roller);
+			pool = rollDamageComponents(missComponents, false, this.actorRoller(request.actorId, "damage"));
 		}
 		const damage =
 			hit.isHit || pool.length > 0
-				? resolveDamage(this.encounter, request.targetId, pool, { critical: hit.isCrit })
+				? this.damage(request.actorId, request.targetId, pool, source, hit.isCrit)
 				: undefined;
+		if (damage) ctx.primaryDamage = damage;
 		if (hit.isHit) this.encounter.turn.hitActors.add(request.actorId);
 		const triggeredAttacks: AttackResult[] = [];
 		const result: AttackResult = {
@@ -711,18 +1367,28 @@ export class CombatEngine {
 			attackIndexInTurn: attack.index,
 			hit,
 			...(damage === undefined ? {} : { damage }),
+			attackDamageReducedToZero: damage?.hp.reducedToZero ?? false,
 			decisions: ctx.decisions,
 			triggeredAttacks,
-			limitations: [...(ctx.character?.characterClass.unsupportedFeatures ?? []), ...(prepared?.limitations ?? [])],
+			limitations: [
+				...(ctx.character?.characterClass.unsupportedFeatures ?? []),
+				...(this.featLimitations.get(request.actorId) ?? []),
+				...(prepared?.limitations ?? []),
+			],
 			...(prepared ? { weaponInstanceId: prepared.instance.id } : {}),
+			additionalDamage,
+			savingThrows,
 		};
+		resolvedAttack = result;
+		if ((damage?.appliedDamage ?? 0) > 0) for (const hook of hooks) hook.afterPrimaryDamage?.(ctx, result);
+		if (hit.isHit) for (const hook of hooks) hook.afterHitDamage?.({ ...ctx, hit }, result);
 		const mastery = resolveMasteryHit(ctx, result, { save: (save) => this.resolveSavingThrow(save) });
 		for (const effect of mastery.effects ?? []) this.encounter.addEffect(effect);
 		for (const condition of mastery.addConditions ?? []) {
 			if (!ctx.targetState.conditions.some((existing) => existing.name === condition.name))
 				ctx.targetState.conditions.push({ ...condition });
 		}
-		if (mastery.savingThrows) result.savingThrows = mastery.savingThrows;
+		if (mastery.savingThrows) savingThrows.push(...mastery.savingThrows);
 		if (
 			request.action &&
 			request.actionSource === "attack-action" &&
@@ -762,6 +1428,8 @@ export class CombatEngine {
 		)
 			throw new Error("Invalid simultaneous trigger order");
 		for (const id of ordered) triggers.get(id)?.();
+		if (savingThrows.length === 0) delete result.savingThrows;
+		if (additionalDamage.length === 0) delete result.additionalDamage;
 		// Keep outcome data detached from later hooks/turns and strategy references.
 		if (request.action && !request.grant) this.actionEntry(request.action).attacks.push(result);
 		if (implicitAction) this.finishAttackAction(implicitAction);
@@ -808,7 +1476,9 @@ export class CombatEngine {
 				this.encounter.state(candidate.targetId).lifeState === "dead" ||
 				!Number.isFinite(candidate.distanceToActor) ||
 				candidate.distanceToActor < 0 ||
-				candidate.distanceToActor > ctx.weapon.reach ||
+				candidate.distanceToActor >
+					ctx.weapon.reach +
+						(ctx.character?.characterClass.getMeleeReachBonus(ctx.character.level, ctx.weapon, ctx.isOwnTurn) ?? 0) ||
 				!Number.isFinite(candidate.distanceToPrimary) ||
 				candidate.distanceToPrimary < 0 ||
 				candidate.distanceToPrimary > 5
@@ -898,7 +1568,7 @@ export class CombatEngine {
 		action: AttackActionHandle | undefined,
 		actorId: string,
 		preferredTargetId: string,
-		options: { mode?: AttackRequest["mode"]; weapon?: Weapon; distance?: number },
+		options: AttackActionOptions,
 	): AttackSelection[] {
 		const actor = this.encounter.definition(actorId);
 		const preferred = options.weapon ?? (actor instanceof BaseCharacter ? actor.weapon : undefined);
@@ -912,6 +1582,40 @@ export class CombatEngine {
 		const opportunity = this.lightOpportunities.get(actorId);
 		const additional = !!action && opportunity?.action === action && !this.encounter.hasUsed(actorId, "weapon.light");
 		const candidates: AttackSelection[] = [];
+		if (options.unarmed && primary && actor instanceof BaseCharacter) {
+			for (const targetId of targets) {
+				const selection: AttackSelection = {
+					targetId,
+					mode: "melee",
+					ability: "strength",
+					profile: {
+						attackBonus: actor.getStatModifier("strength") + actor.getProficiencyBonus(),
+						damage: [
+							{
+								id: "unarmed",
+								source: "unarmed.strike",
+								origin: "unarmed",
+								damageType: "bludgeoning",
+								dice: [],
+								flatBonus: 1 + actor.getStatModifier("strength"),
+								doublesOnCrit: false,
+							},
+						],
+					},
+					...(options.distance !== undefined ? { distance: options.distance } : {}),
+				};
+				if (
+					this.isAttackLegal({
+						...selection,
+						actorId,
+						actionSource: "attack-action",
+						...(action ? { action, actionId: action.id } : {}),
+					})
+				)
+					candidates.push(selection);
+			}
+			return candidates;
+		}
 		for (const origin of ["primary", "nick", "light"] as const) {
 			if (origin === "primary" && !primary) continue;
 			if (origin !== "primary" && !additional) continue;
@@ -930,10 +1634,7 @@ export class CombatEngine {
 				)
 					continue;
 				for (const targetId of targets) {
-					const mode =
-						instance.weapon.name === preferred?.name
-							? (options.mode ?? instance.weapon.category)
-							: instance.weapon.category;
+					const mode = options.mode ?? instance.weapon.category;
 					const selection: AttackSelection = {
 						targetId,
 						weaponInstanceId: instance.id,
@@ -952,31 +1653,87 @@ export class CombatEngine {
 						actionSource: origin === "light" ? "bonus-action" : "attack-action",
 						...(action ? { action, actionId: action.id } : {}),
 					};
+					if (origin === "primary" && instance.weapon.properties.includes("light")) {
+						const other = inventory.find(
+							(item) =>
+								item.id !== instance.id &&
+								!item.weapon.properties.includes("two-handed") &&
+								!this.encounter.state(actorId).spentWeaponInstanceIds.has(item.id) &&
+								hands.left !== item.id &&
+								hands.right !== item.id,
+						);
+						if (other) {
+							const preparedChoice: AttackSelection = { ...selection };
+							if (
+								selection.equip &&
+								hands.left === null &&
+								hands.right === null &&
+								actor instanceof BaseCharacter &&
+								actor.feats.some((feat) => feat.name === "dual-wielder")
+							)
+								preparedChoice.equipAdditional = {
+									kind: "draw",
+									when: "before",
+									weaponInstanceId: other.id,
+									hand: selection.equip.hand === "left" ? "right" : "left",
+								};
+							else if (!selection.equip && (hands.left === null || hands.right === null))
+								preparedChoice.equip = {
+									kind: "draw",
+									when: "before",
+									weaponInstanceId: other.id,
+									hand: hands.left === null ? "left" : "right",
+								};
+							if (
+								(preparedChoice.equipAdditional || preparedChoice.equip !== selection.equip) &&
+								this.isAttackLegal({ ...request, ...preparedChoice })
+							)
+								candidates.push(preparedChoice);
+						}
+					}
 					if (this.isAttackLegal(request)) candidates.push(selection);
 				}
 			}
 		}
 		return candidates;
 	}
-	resolveAttackAction(
+	legalAttackCandidates(
 		actorId: string,
 		targetId: string,
-		options: { mode?: AttackRequest["mode"]; weapon?: Weapon; distance?: number } = {},
-	): AttackActionResult {
+		options: AttackActionOptions = {},
+	): readonly AttackSelection[] {
+		return freezeSnapshot(structuredClone(this.actionCandidates(undefined, actorId, targetId, options)));
+	}
+	resolveAttackAction(actorId: string, targetId: string, options: AttackActionOptions = {}): AttackActionResult {
 		if (this.encounter.turn.ownerId !== actorId) throw new Error("Attack action requires the actor's own turn");
 		if (!this.canAct(actorId)) return { totalDamage: 0, attacks: [] };
 		const actor = this.encounter.definition(actorId);
 		if (!(actor instanceof BaseCharacter)) throw new Error("Monster attack actions require an explicit profile");
 		if (!this.encounter.canUseAction(actorId)) throw new Error("Action unavailable");
-		const initial = this.normalized({
-			actorId,
-			targetId,
-			actionSource: "attack-action",
-			mode: options.mode ?? (options.weapon ?? actor.weapon).category,
-			...(options.weapon ? { weapon: options.weapon } : {}),
-			...(options.distance !== undefined ? { distance: options.distance } : {}),
-		});
-		this.validateAttack(initial);
+		if (
+			!options ||
+			typeof options !== "object" ||
+			Array.isArray(options) ||
+			(options.unarmed !== undefined && typeof options.unarmed !== "boolean") ||
+			(options.unarmedEffects !== undefined && typeof options.unarmedEffects !== "boolean")
+		)
+			throw new Error("Invalid attack action options");
+		this.encounter.definition(targetId);
+		if (targetId === actorId) throw new Error("Invalid attack action target");
+		if (options.mode !== undefined && !["melee", "ranged", "thrown"].includes(options.mode))
+			throw new Error("Invalid attack action mode");
+		if (options.distance !== undefined && (!Number.isFinite(options.distance) || options.distance < 0))
+			throw new Error("Invalid attack action distance");
+		if (options.weapon) {
+			this.validateWeapon(options.weapon);
+			if (!this.encounter.weapons(actorId).some((instance) => instance.weapon.id === options.weapon?.id))
+				throw new Error("Unknown selected weapon in actor inventory");
+		}
+		if (
+			this.actionCandidates(undefined, actorId, targetId, options).length === 0 &&
+			!(options.unarmedEffects && this.legalUnarmedEffectCandidates(actorId, targetId).length)
+		)
+			return { totalDamage: 0, attacks: [] };
 		let action: AttackActionHandle | undefined;
 		while (true) {
 			const candidates = this.actionCandidates(action, actorId, targetId, options);
@@ -985,12 +1742,24 @@ export class CombatEngine {
 				actor: this.encounter.snapshot(actorId),
 				targets: this.encounter.ids.filter((id) => id !== actorId).map((id) => this.encounter.snapshot(id)),
 				turnId: this.encounter.turn.id,
-				actionId: action?.id ?? initial.actionId ?? "pending",
+				actionId: action?.id ?? "pending",
 				remainingPrimaryAttacks: remaining,
 				bonusActionAvailable: this.encounter.canUseBonusAction(actorId),
 				reactionAvailable: this.encounter.canUseReaction(actorId),
 				effects: this.encounter.ids.flatMap((id) => this.encounter.effectsOn(id)),
 			});
+			const effectCandidates =
+				options.unarmedEffects && remaining > 0 ? this.legalUnarmedEffectCandidates(actorId, targetId) : [];
+			const effectChoice = this.strategy.chooseUnarmedEffect(snapshot, effectCandidates);
+			if (effectChoice !== null) {
+				if (!Number.isSafeInteger(effectChoice) || effectChoice < 0 || effectChoice >= effectCandidates.length)
+					throw new Error("Invalid Unarmed effect choice");
+				const selected = effectCandidates[effectChoice];
+				if (!selected) throw new Error("Invalid Unarmed effect choice");
+				if (!action) action = this.beginAttackAction(actorId);
+				this.resolveUnarmedEffectInAction(action, selected);
+				continue;
+			}
 			const choice = this.strategy.chooseNextAttack(snapshot, freezeSnapshot(structuredClone(candidates)));
 			if (choice === null) break;
 			if (!Number.isSafeInteger(choice) || choice < 0 || choice >= candidates.length)
@@ -1014,7 +1783,7 @@ export function resolveAttackTurn(
 	engine: CombatEngine,
 	actorId: string,
 	targetId: string,
-	options?: { mode?: AttackRequest["mode"]; weapon?: Weapon; distance?: number },
+	options?: AttackActionOptions,
 ): AttackActionResult {
 	return engine.resolveAttackAction(actorId, targetId, options);
 }

@@ -1,4 +1,5 @@
 import { runCombatSimulationDemo } from "./scenarios/CombatSimulation.ts";
+import { runDprSimulationDemo } from "./scenarios/DprSimulation.ts";
 import { createFiveFeatScenario } from "./scenarios/FiveFeats.ts";
 
 const scenario = createFiveFeatScenario();
@@ -23,3 +24,4 @@ console.log(
 );
 scenario.engine.endTurn();
 console.log(JSON.stringify(runCombatSimulationDemo(), null, 2));
+console.log(JSON.stringify(runDprSimulationDemo(), null, 2));

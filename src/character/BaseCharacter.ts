@@ -2,9 +2,10 @@ import type BaseClass from "../classes/BaseClass.ts";
 import type { DamageDefenses } from "../combat/DamageTypes.ts";
 import { resolveFeatSelections } from "../feats/FeatSelection.ts";
 import type { FeatSelection, ValidatedFeatSelection } from "../feats/FeatTypes.ts";
+import type { ArmorCategory } from "../Items/Armor.ts";
 import type Weapon from "../Items/Weapon.ts";
 import type { TConditionName, TConditionState } from "../modifiers/Conditions.ts";
-import { type CombatantOptions, combatantData } from "./CombatantData.ts";
+import { type CharacterBuildData, type CombatantOptions, combatantData } from "./CombatantData.ts";
 
 export type TStatsType = "strength" | "dexterity" | "constitution" | "intelligence" | "wisdom" | "charisma";
 
@@ -44,6 +45,10 @@ class BaseCharacter {
 	readonly savingThrowBonuses: Partial<Record<TStatsType, number>>;
 	readonly defenses: DamageDefenses;
 	readonly medicineProficient: boolean;
+	readonly armorCategory: ArmorCategory;
+	readonly armorTrained: boolean;
+	readonly shieldEquipped: boolean;
+	readonly buildData: CharacterBuildData | undefined;
 
 	constructor(
 		level: number,
@@ -61,12 +66,28 @@ class BaseCharacter {
 		this.savingThrowBonuses = data.savingThrowBonuses;
 		this.defenses = data.defenses;
 		this.medicineProficient = data.medicineProficient;
+		this.armorCategory = combatOptions.armorCategory ?? "none";
+		this.armorTrained = combatOptions.armorTrained ?? true;
+		this.shieldEquipped = combatOptions.shieldEquipped ?? false;
+		this.buildData = combatOptions.buildData;
 		this.level = level;
 		this.characterClass = characterClass;
 		this.weapon = weapon;
 		this.weaponPrimaryStat = weaponPrimaryStat;
-		const resolved = resolveFeatSelections({ level, stats, feats });
+		const resolved = resolveFeatSelections({
+			level,
+			stats,
+			feats,
+			context: combatOptions.featValidationContext ?? {
+				armorTraining: combatOptions.buildData?.armorTraining ?? [],
+				savingThrowProficiencies: data.savingThrowProficiencies,
+				skills: combatOptions.buildData?.skills ?? [],
+				expertise: [],
+				tools: combatOptions.buildData?.tools ?? [],
+			},
+		});
 		this.stats = resolved.stats;
+		this.savingThrowProficiencies = Object.freeze(resolved.savingThrowProficiencies);
 		this.armorClass = armorClass;
 		this.hitPoints = hitPoints;
 		this.conditions = [];
@@ -74,6 +95,7 @@ class BaseCharacter {
 			resolved.feats.map((feat) =>
 				Object.freeze({
 					...feat,
+					...(feat.choices ? { choices: freezeChoices(feat.choices) } : {}),
 					...(feat.abilityScoreImprovement === undefined
 						? {}
 						: {
@@ -157,4 +179,11 @@ class BaseCharacter {
 	}
 }
 
+function freezeChoices<T>(value: T): T {
+	if (value !== null && typeof value === "object") {
+		for (const child of Object.values(value)) freezeChoices(child);
+		Object.freeze(value);
+	}
+	return value;
+}
 export default BaseCharacter;
