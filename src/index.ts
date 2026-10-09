@@ -1,6 +1,6 @@
-import { runCombatSimulationDemo } from "./scenarios/CombatSimulation.ts";
-import { runDprSimulationDemo } from "./scenarios/DprSimulation.ts";
-import { createFiveFeatScenario } from "./scenarios/FiveFeats.ts";
+import { runCombatSimulationDemo } from "./examples/CombatSimulation.ts";
+import { runDprSimulationDemo } from "./examples/DprSimulation.ts";
+import { createFiveFeatScenario } from "./examples/FiveFeats.ts";
 
 const scenario = createFiveFeatScenario();
 const result = scenario.run();

@@ -1,9 +1,9 @@
 import type BaseClass from "../classes/BaseClass.ts";
-import type { DamageDefenses } from "../combat/DamageTypes.ts";
-import { resolveFeatSelections } from "../feats/FeatSelection.ts";
-import type { FeatSelection, ValidatedFeatSelection } from "../feats/FeatTypes.ts";
-import type { ArmorCategory } from "../Items/Armor.ts";
-import type Weapon from "../Items/Weapon.ts";
+import type { DamageDefenses } from "../combat/damage/DamageTypes.ts";
+import type { FeatSelection, ValidatedFeatSelection } from "../feats/catalog/FeatTypes.ts";
+import { resolveFeatSelections } from "../feats/selection/FeatSelection.ts";
+import type { ArmorCategory } from "../items/Armor.ts";
+import type Weapon from "../items/weapons/Weapon.ts";
 import type { TConditionName, TConditionState } from "../modifiers/Conditions.ts";
 import { type CharacterBuildData, type CombatantOptions, combatantData } from "./CombatantData.ts";
 

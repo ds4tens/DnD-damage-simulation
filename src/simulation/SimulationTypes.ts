@@ -1,12 +1,12 @@
 import type { TStatBlock } from "../character/BaseCharacter.ts";
-import type { LegalCharacterBuild } from "../character/CharacterBuild.ts";
+import type { LegalCharacterBuild } from "../character/build/CharacterBuild.ts";
 import type { CombatantOptions } from "../character/CombatantData.ts";
 import type { AttackMode, AttackResult, CreatureSize, UnarmedEffectResult } from "../combat/CombatTypes.ts";
-import type { InitiativeOptions, InitiativeResult } from "../combat/EncounterScheduler.ts";
+import type { InitiativeOptions, InitiativeResult } from "../combat/engine/EncounterScheduler.ts";
 import type { CombatStrategy } from "../combat/Strategy.ts";
 import type { DiceRoller } from "../dice/RandomSource.ts";
 import type { TConditionState } from "../modifiers/Conditions.ts";
-import type { Estimate } from "./Statistics.ts";
+import type { Estimate } from "./metrics/Statistics.ts";
 
 export type JsonValue = null | boolean | number | string | readonly JsonValue[] | { readonly [key: string]: JsonValue };
 export type DprTarget = {

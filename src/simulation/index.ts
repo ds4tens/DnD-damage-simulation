@@ -1,7 +1,7 @@
-export { aggregateDprTrials } from "./Aggregation.ts";
-export { runDprBatch, runDprTrial } from "./DprSimulation.ts";
-export { defaultCombatRounds, defaultTrials } from "./Scenario.ts";
-export { combatRngAlgorithm, deriveSeed, seedDerivationVersion } from "./Seed.ts";
+export { aggregateDprTrials } from "./metrics/Aggregation.ts";
+export { type Estimate, estimate } from "./metrics/Statistics.ts";
+export { runDprBatch, runDprTrial } from "./runtime/DprSimulation.ts";
+export { combatRngAlgorithm, deriveSeed, seedDerivationVersion } from "./runtime/Seed.ts";
 export type {
 	ActorHealth,
 	DprAggregate,
@@ -21,4 +21,4 @@ export type {
 	ResourceCost,
 	ResourceCounts,
 } from "./SimulationTypes.ts";
-export { type Estimate, estimate } from "./Statistics.ts";
+export { defaultCombatRounds, defaultTrials } from "./scenario/Scenario.ts";

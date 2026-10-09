@@ -1,11 +1,11 @@
-import type { DamageDefenses, DamageType } from "../combat/DamageTypes.ts";
-import type { FeatValidationContext } from "../feats/FeatSelection.ts";
-import type { ArmorTraining } from "../feats/FeatTypes.ts";
-import type { ArmorCategory } from "../Items/Armor.ts";
-import type { WeaponCatalogId } from "../Items/Weapon/WeaponList.ts";
+import type { DamageDefenses, DamageType } from "../combat/damage/DamageTypes.ts";
+import type { ArmorTraining } from "../feats/catalog/FeatTypes.ts";
+import type { FeatValidationContext } from "../feats/selection/FeatSelection.ts";
+import type { ArmorCategory } from "../items/Armor.ts";
+import type { WeaponCatalogId } from "../items/weapons/WeaponList.ts";
 import type { TStatsType } from "./BaseCharacter.ts";
-import type { ConsumableStock } from "./CharacterBuildTypes.ts";
-import type { SpeciesSelection, SpeciesSize } from "./Origins.ts";
+import type { ConsumableStock } from "./build/CharacterBuildTypes.ts";
+import type { SpeciesSelection, SpeciesSize } from "./origins/Origins.ts";
 
 export const abilityNames: readonly TStatsType[] = [
 	"strength",

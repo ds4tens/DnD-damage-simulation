@@ -1,18 +1,18 @@
 import type BaseCharacter from "../character/BaseCharacter.ts";
 import type { TStatsType } from "../character/BaseCharacter.ts";
 import type { DiceRoller } from "../dice/RandomSource.ts";
-import type { FeatName } from "../feats/FeatTypes.ts";
-import type { WeaponCatalogId } from "../Items/Weapon/WeaponList.ts";
-import type Weapon from "../Items/Weapon.ts";
+import type { FeatName } from "../feats/catalog/FeatTypes.ts";
+import type Weapon from "../items/weapons/Weapon.ts";
+import type { WeaponCatalogId } from "../items/weapons/WeaponList.ts";
 import type { TConditionState } from "../modifiers/Conditions.ts";
 import type { TCombatModifier } from "../modifiers/Modifiers.ts";
 import type BaseMonster from "../monster/BaseMonster.ts";
-import type { PersistentResourceSnapshot, ResourceDefinition } from "./CombatResources.ts";
-import type { DamageComponent, DamagePool, DamageResult, DamageType, RolledDamageDie } from "./DamageTypes.ts";
-import type { CombatantState, EffectInput, EncounterState, TimedEffect } from "./EncounterState.ts";
-import type { DeathSaveResult, LifeState, ZeroHpBehavior } from "./HitPointTypes.ts";
-import type { SavingThrowRequest, SavingThrowResult } from "./SavingThrowTypes.ts";
+import type { DamageComponent, DamagePool, DamageResult, DamageType, RolledDamageDie } from "./damage/DamageTypes.ts";
+import type { DeathSaveResult, LifeState, ZeroHpBehavior } from "./health/HitPointTypes.ts";
 import type { CombatStrategy } from "./Strategy.ts";
+import type { SavingThrowRequest, SavingThrowResult } from "./saves/SavingThrowTypes.ts";
+import type { PersistentResourceSnapshot, ResourceDefinition } from "./state/CombatResources.ts";
+import type { CombatantState, EffectInput, EncounterState, TimedEffect } from "./state/EncounterState.ts";
 
 export type CombatantDefinition = BaseCharacter | BaseMonster;
 export type CreatureSize = "tiny" | "small" | "medium" | "large" | "huge" | "gargantuan";
